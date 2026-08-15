@@ -34,7 +34,7 @@ ResearchAgent 语言模型抽象层
 ┌──────────────────────────────────────────────────────────────┐
 │  两层缓存系统 (节省 API 费用，加速调试)                          │
 │  第1层: LRU 内存缓存 (LM_LRU_CACHE_MAX_SIZE=3000)              │
-│  第2层: litellm 磁盘缓存 (~/.storm_local_cache)                │
+│  第2层: litellm 磁盘缓存 (~/.myagent_llm_cache)                │
 │  相同 prompt → 直接返回缓存，不发 API 请求                       │
 └──────────────────────────────────────────────────────────────┘
 
@@ -97,9 +97,9 @@ with warnings.catch_warnings():
 
 from litellm.caching.caching import Cache
 
-# 磁盘缓存目录: ~/.storm_local_cache
+# 磁盘缓存目录: ~/.myagent_llm_cache
 # 注意: 这是 litellm 层面的缓存，与下面的 LRU 内存缓存是两个独立层
-disk_cache_dir = os.path.join(Path.home(), ".storm_local_cache")
+disk_cache_dir = os.path.join(Path.home(), ".myagent_llm_cache")
 litellm.cache = Cache(disk_cache_dir=disk_cache_dir, type="disk")
 
 # 注释掉的代码是 litellm 未安装时的 fallback 处理
@@ -234,7 +234,7 @@ class LM:
 #
 # 第2层: litellm.cache (磁盘)
 #   - 跨进程持久化，重启后仍有效
-#   - 存储目录: ~/.storm_local_cache
+#   - 存储目录: ~/.myagent_llm_cache
 #   - litellm 原生支持，无需额外代码
 #
 # 当 cache=False 时，两级缓存都不走（直接调 API）

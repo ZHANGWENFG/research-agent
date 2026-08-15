@@ -211,9 +211,9 @@ class ResearchGraphAdapter:
             "answer": final.get("answer", ""),
             "citations": final.get("citations", []),
             "grounded": final.get("grounded", False),
-            "retrieval_stack": final.get("retrieval_stack", "langgraph-v4.5"),
+            "retrieval_stack": final.get("retrieval_stack", "myagent"),
             "node_events": [],
-            "runtime": "langgraph-v4.5",
+            "runtime": "myagent",
             "router_decision": final.get("router_decision"),
             "memory_hits": final.get("memory_hits", []),
         }

@@ -188,7 +188,7 @@ class BenchmarkRegistry:
             if not os.getenv("DEEPSEEK_API_KEY"):
                 raise ValueError("运行 QASPER Answer F1 需要 DEEPSEEK_API_KEY")
 
-        runner = PROJECT_ROOT / "examples" / "storm_examples" / definition.runner
+        runner = PROJECT_ROOT / "examples" / "myagent_examples" / definition.runner
         command = [sys.executable, str(runner)]
         output_dir = Path(output_dir)
         if benchmark_id == "scifact-retrieval-v55":

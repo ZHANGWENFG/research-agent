@@ -142,6 +142,7 @@ def _run_dir_signature(run_dir):
     """mtime+size signature of the files that feed the runtime index."""
     parts = []
     for name in (
+        "myagent_article_polished.txt",
         "storm_gen_article_polished.txt",
         "storm_gen_article.txt",
         "raw_search_results.json",

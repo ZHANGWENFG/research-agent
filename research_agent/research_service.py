@@ -11,6 +11,12 @@ from typing import Dict, List, Optional
 
 from .research_eval import EvalCase, evaluate_run, write_scorecards
 from .research_kb_qa import ResearchKnowledgeBase, write_qa_artifact
+from .research_retrieval_common import (
+    ARTICLE_FILENAME,
+    OUTLINE_FILENAME,
+    resolve_article_path,
+    resolve_outline_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,12 +238,9 @@ class ResearchTaskService:
     def get_article(self, task_id: str):
         state = self._read_state(task_id)
         output_dir = Path(state["output_dir"])
-        path = _first_existing(
-            [
-                output_dir / "storm_gen_article_polished.txt",
-                output_dir / "storm_gen_article.txt",
-            ]
-        )
+        path = resolve_article_path(output_dir)
+        if not path.exists():
+            path = None
         return {
             "task_id": task_id,
             "path": str(path) if path else "",
@@ -715,16 +718,16 @@ class ResearchTaskService:
             "task_id": state["task_id"],
             "topic": topic,
             "artifacts": [
-                "storm_gen_article_polished.txt",
+                ARTICLE_FILENAME,
                 "raw_search_results.json",
                 "research_trace.jsonl",
             ],
         }
-        (output_dir / "storm_gen_outline.txt").write_text(
+        (output_dir / OUTLINE_FILENAME).write_text(
             "# {0}\n## 定义\n## 神经网络抑制".format(topic),
             encoding="utf-8",
         )
-        (output_dir / "storm_gen_article_polished.txt").write_text(
+        (output_dir / ARTICLE_FILENAME).write_text(
             article,
             encoding="utf-8",
         )
@@ -823,7 +826,7 @@ class ResearchTaskService:
         state = self._read_state(task_id)
         output_dir = Path(state["output_dir"])
         return {
-            "outline": _read_text(output_dir / "storm_gen_outline.txt"),
+            "outline": _read_text(resolve_outline_path(output_dir)),
             "conversation": _read_text(output_dir / "conversation_log.json"),
             "reflection": _read_text(output_dir / "reflection.txt"),
             "run_summary": _read_text(output_dir / "run_summary.json"),
@@ -840,7 +843,7 @@ class ResearchTaskService:
           口子1 全文获取：专家回答命中文献时触发 get_fulltext 回调——
                  PMC/EuropePMC 文本接口优先 → 白名单自动下载 → 非白名单进审批队列
           口子2 skill 注入：调研开始前扫描 skills/ 按主题匹配，注入视角生成/专家回答
-        成稿写到 storm_gen_article_polished.txt（知识库问答 from_run_dir 依赖此文件名）。
+        成稿写到 {ARTICLE_FILENAME}（知识库问答 from_run_dir 依赖此文件名）。
         """
         from .research_fulltext import (
             ApprovalQueue,
@@ -953,7 +956,7 @@ class ResearchTaskService:
             skill_context=skill_context,
         )
         article = result.get("article") or ""
-        (output_dir / "storm_gen_article_polished.txt").write_text(
+        (output_dir / ARTICLE_FILENAME).write_text(
             article, encoding="utf-8"
         )
         (output_dir / "research_loop_result.json").write_text(

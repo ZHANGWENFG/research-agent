@@ -177,7 +177,7 @@ class ResearchLangGraph:
                 "answer": research["article"],
                 "citations": citations,
                 "grounded": bool(citations),
-                "retrieval_stack": "storm_deep_research_loop",
+                "retrieval_stack": "myagent_deep_research_loop",
             }
         if kb.get("answer"):
             return {

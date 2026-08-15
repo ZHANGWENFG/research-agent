@@ -257,7 +257,7 @@ class HybridPaperIndex:
         chunk_size: int = 500,
         chunk_overlap: int = 100,
     ):
-        from .research_retrieval_common import chunk_text
+        from .research_retrieval_common import chunk_text, resolve_article_path
 
         if chunk_overlap >= chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
@@ -297,11 +297,11 @@ class HybridPaperIndex:
         legacy runtime index: polished article plus raw search results."""
         run_dir = Path(run_dir)
         documents = []
-        article = _read_first_existing(
-            [
-                run_dir / "storm_gen_article_polished.txt",
-                run_dir / "storm_gen_article.txt",
-            ]
+        article_path = resolve_article_path(run_dir)
+        article = (
+            article_path.read_text(encoding="utf-8", errors="replace")
+            if article_path.exists()
+            else ""
         )
         if article:
             documents.append(
@@ -310,7 +310,7 @@ class HybridPaperIndex:
                     "title": "Generated Research Article",
                     "text": article,
                     "source_type": "article",
-                    "url": str(run_dir / "storm_gen_article_polished.txt"),
+                    "url": str(article_path),
                 }
             )
         for index, result in enumerate(

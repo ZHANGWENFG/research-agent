@@ -49,6 +49,7 @@ ROOT_DIR = Path(__file__).resolve().parent / "storage"
 ROOT_DIR.mkdir(parents=True, exist_ok=True)
 
 from research_agent.research_fulltext import ApprovalQueue  # noqa: E402
+from research_agent.research_task_status import TaskStatus  # noqa: E402
 from research_agent.research_service import ResearchTaskService  # noqa: E402
 from research_agent.research_skill import match_skills, scan_skills  # noqa: E402
 from research_agent.research_chat_agent import ResearchChatAgent  # noqa: E402
@@ -134,7 +135,7 @@ def submit_research(request: ResearchRequest):
             logger.exception("task %s failed: %s", task_id, exc)
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"task_id": task_id, "status": "queued"}
+    return {"task_id": task_id, "status": TaskStatus.QUEUED}
 
 
 @app.get("/api/research/{task_id}")
@@ -160,7 +161,7 @@ def stream_research_task(task_id: str):
             status = state.get("status", "unknown")
             yield _sse("task_status", {"task_id": task_id, "status": status,
                                        "summary": state.get("result_summary")})
-            if status in ("succeeded", "failed"):
+            if status in TaskStatus.TERMINAL:
                 break
             if time.time() - heartbeat_at > 15:
                 yield _sse("heartbeat", {"ts": time.time()})

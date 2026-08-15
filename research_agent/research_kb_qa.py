@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .research_memory import ResearchMemoryStore
+from .research_retrieval_common import resolve_article_path
 
 
 class ResearchKnowledgeBase:
@@ -16,11 +17,11 @@ class ResearchKnowledgeBase:
     def from_run_dir(cls, run_dir):
         run_dir = Path(run_dir)
         documents = []
-        article = _read_first_existing(
-            [
-                run_dir / "storm_gen_article_polished.txt",
-                run_dir / "storm_gen_article.txt",
-            ]
+        article_path = resolve_article_path(run_dir)
+        article = (
+            article_path.read_text(encoding="utf-8", errors="replace")
+            if article_path.exists()
+            else ""
         )
         if article:
             for index, paragraph in enumerate(_split_paragraphs(article), start=1):
@@ -30,7 +31,7 @@ class ResearchKnowledgeBase:
                         "chunk_id": "article-{0}".format(index),
                         "title": "Generated article paragraph {0}".format(index),
                         "content": paragraph,
-                        "url": str(run_dir / "storm_gen_article_polished.txt"),
+                        "url": str(article_path),
                         "source": "article",
                         "source_type": "article",
                         "score": 0,

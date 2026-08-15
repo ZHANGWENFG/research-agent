@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+from .research_retrieval_common import resolve_article_path, resolve_outline_path
+
 
 @dataclass
 class EvalCase:
@@ -143,10 +145,8 @@ def evaluate_run(run_dir, case: EvalCase):
     run_dir = Path(run_dir)
     raw_results = _read_json(run_dir / "raw_search_results.json", [])
     summary = _read_json(run_dir / "run_summary.json", {})
-    outline = _read_text(run_dir / "storm_gen_outline.txt")
-    article = _read_text(run_dir / "storm_gen_article_polished.txt")
-    if not article:
-        article = _read_text(run_dir / "storm_gen_article.txt")
+    outline = _read_text(resolve_outline_path(run_dir))
+    article = _read_text(resolve_article_path(run_dir))
     trace_events = _load_trace_events(run_dir / "research_trace.jsonl")
 
     retrieval_text = "\n".join(_iter_result_texts(raw_results))

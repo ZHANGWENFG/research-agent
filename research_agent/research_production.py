@@ -889,7 +889,7 @@ def _component_for_node(node):
     if node in {"knowledge_retrieval", "evidence_grade"}:
         return "retrieval"
     if node == "deep_research":
-        return "storm_tool"
+        return "myagent_tool"
     if node == "classify":
         return "router"
     return "agent_runtime"

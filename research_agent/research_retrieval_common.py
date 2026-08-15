@@ -23,6 +23,33 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 from .research_memory import compress_context
 
+# ---------------------------------------------------------------------------
+# 调研产物文件名（自研命名；读取端兼容历史 STORM 命名的产物目录，保证旧评测背书可复现）
+# ---------------------------------------------------------------------------
+ARTICLE_FILENAME = "myagent_article_polished.txt"
+OUTLINE_FILENAME = "myagent_outline.txt"
+_LEGACY_ARTICLE_FILENAMES = ("storm_gen_article_polished.txt", "storm_gen_article.txt")
+_LEGACY_OUTLINE_FILENAME = "storm_gen_outline.txt"
+
+
+def resolve_article_path(run_dir) -> Path:
+    """新命名优先；历史产物目录（storm_gen_*）回退兜底。"""
+    run_dir = Path(run_dir)
+    for name in (ARTICLE_FILENAME,) + _LEGACY_ARTICLE_FILENAMES:
+        path = run_dir / name
+        if path.exists():
+            return path
+    return run_dir / ARTICLE_FILENAME
+
+
+def resolve_outline_path(run_dir) -> Path:
+    run_dir = Path(run_dir)
+    for name in (OUTLINE_FILENAME, _LEGACY_OUTLINE_FILENAME):
+        path = run_dir / name
+        if path.exists():
+            return path
+    return run_dir / OUTLINE_FILENAME
+
 
 class HashEmbeddingProvider:
     """Deterministic local embedding baseline."""
@@ -118,11 +145,11 @@ class ResearchRAGIndex:
     ):
         run_dir = Path(run_dir)
         documents = []
-        article = _read_first_existing(
-            [
-                run_dir / "storm_gen_article_polished.txt",
-                run_dir / "storm_gen_article.txt",
-            ]
+        article_path = resolve_article_path(run_dir)
+        article = (
+            article_path.read_text(encoding="utf-8", errors="replace")
+            if article_path.exists()
+            else ""
         )
         if article:
             documents.append(
@@ -131,7 +158,7 @@ class ResearchRAGIndex:
                     "title": "Generated Research Article",
                     "text": article,
                     "source_type": "article",
-                    "url": str(run_dir / "storm_gen_article_polished.txt"),
+                    "url": str(article_path),
                 }
             )
         for index, result in enumerate(_read_json(run_dir / "raw_search_results.json", []), start=1):
