@@ -29,8 +29,8 @@ class MemoryRecord:
         )
 
 
-class PaperStormMemoryStore:
-    """Small persistent memory store for PaperStorm runs and QA sessions."""
+class ResearchMemoryStore:
+    """Small persistent memory store for Research runs and QA sessions."""
 
     def __init__(
         self,

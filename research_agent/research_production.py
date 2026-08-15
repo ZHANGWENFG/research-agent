@@ -20,7 +20,7 @@ class _ClosingSQLiteConnection(sqlite3.Connection):
             self.close()
 
 
-class ProductionControlPlaneV45:
+class ProductionControlPlane:
     """SQLite WAL control plane for the local production-governance baseline.
 
     【改造】SINGLE_USER_MODE=True：本地单机运行，authorize 直接放行（保留审计），
@@ -122,7 +122,7 @@ class ProductionControlPlaneV45:
     ):
         # 【改造】单用户模式（本地单机运行）：跳过租户/资源 ACL 校验，直接放行，
         # 保留审计留痕；signature 不变，调用方零改动。多租户能力仍在（置 False 恢复原逻辑）。
-        if ProductionControlPlaneV45.SINGLE_USER_MODE:
+        if ProductionControlPlane.SINGLE_USER_MODE:
             event = {
                 "event_id": uuid.uuid4().hex,
                 "tenant_id": tenant_id or "local",
@@ -653,8 +653,8 @@ class ProductionControlPlaneV45:
                 connection.executescript(_SCHEMA)
 
 
-class PaperStormProductionRuntimeV45:
-    runtime_name = "paperstorm-production-v5.0"
+class ResearchProductionRuntime:
+    runtime_name = "research-production-v1.0"
 
     def __init__(
         self,
@@ -665,7 +665,7 @@ class PaperStormProductionRuntimeV45:
         chat_llm=None,
         evidence_judge=None,
     ):
-        from .paperstorm_graph_adapter_v45 import PaperStormGraphAdapterV45
+        from .research_graph_adapter import ResearchGraphAdapter
 
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -673,10 +673,10 @@ class PaperStormProductionRuntimeV45:
         self.intent_router = intent_router
         self.chat_llm = chat_llm
         self.evidence_judge = evidence_judge
-        self.control = control_plane or ProductionControlPlaneV45(
-            self.root_dir / "production_v45.sqlite"
+        self.control = control_plane or ProductionControlPlane(
+            self.root_dir / "production.sqlite"
         )
-        self.graph_runtime_class = PaperStormGraphAdapterV45
+        self.graph_runtime_class = ResearchGraphAdapter
 
     def invoke(self, tenant_id: str = "local", **payload):
         tenant_id = str(tenant_id or "local")
@@ -707,7 +707,7 @@ class PaperStormProductionRuntimeV45:
             with self.control.trace_span(
                 trace_id, "agent_runtime", "conversation_graph"
             ):
-                from .paperstorm_router_llm import (
+                from .research_router_llm import (
                     build_chat_llm_callable,
                     build_intent_router,
                     build_judge_llm_callable,
@@ -716,7 +716,7 @@ class PaperStormProductionRuntimeV45:
                 intent_router = self.intent_router or build_intent_router(
                     run_mode=payload.get("run_mode", "fake")
                 )
-                real_mode = payload.get("run_mode", "fake") == "paperstorm"
+                real_mode = payload.get("run_mode", "fake") == "research"
                 chat_llm = self.chat_llm or build_chat_llm_callable(enabled=real_mode)
                 evidence_judge = self.evidence_judge or build_judge_llm_callable(
                     enabled=real_mode

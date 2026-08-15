@@ -36,7 +36,7 @@
 **参数设计（大白话）**：
 - `thread_id` 为什么要有：检查点按线程号存档、幂等按线程号分账——**没有它，断点续跑和防重发不知道归到哪场对话**。
 - `request_id` 为什么要有：**幂等去重**——同一个请求号再发一次，直接返回上次结果。前端双击、断线重连都会重发请求，没有它就会重复触发调研、重复花钱。
-- `run_mode`：`paperstorm` 真实模式（调大模型、真检索）；`fake` 离线演示模式（不花钱跑通流程）。
+- `run_mode`：`research` 真实模式（调大模型、真检索）；`fake` 离线演示模式（不花钱跑通流程）。
 - `allow_deep_research`：证据不够时允不允许系统自己升级调研——默认允许，这是"自主性"的开关。
 - 调研任务的入参：主题（必填）、检索源（默认 pubmed）、视角数（默认 1）、问答轮数（默认 1）。
 
@@ -49,7 +49,7 @@
 
 然后开一个"追踪区间"（span），后续每一步记耗时和结果，最后落审计。
 
-**谁在干活**：`paperstorm_production_v45.py`——治理闸本体 + 生产运行时（最大的两个类都在这里）。
+**谁在干活**：`research_production.py`——治理闸本体 + 生产运行时（最大的两个类都在这里）。
 
 **参数设计（大白话）**：
 - **幂等**：请求号 + 全量参数算一个"内容指纹"（哈希）存进幂等表；同号再来直接返回上次结果。超时 30 秒。
@@ -70,7 +70,7 @@
 
 **采纳规则**：LLM 判断要有 **65%** 以上把握**并且**不和规则冲突才采纳；失败/超时自动回退规则。
 
-**谁在干活**：`paperstorm_intent_router.py`（判定逻辑）+ `paperstorm_router_llm.py`（大模型调用工厂）。
+**谁在干活**：`research_intent_router.py`（判定逻辑）+ `research_router_llm.py`（大模型调用工厂）。
 
 **参数设计（大白话）**：
 - 规则产出：意图、用哪个工具、要不要检索、**重写后的干净搜索词**、置信度、理由。规则之间互斥保护（含"调研"就不判成"系统帮助"）。
@@ -85,7 +85,7 @@
 
 去 SQLite 长期记忆找相关背景：按用户命名空间隔离 → 混合召回（字面 + 语义向量 + 实体 + 时效 + 近期度，排名融合去重）→ 取最多 **5 条**。**不联网**。
 
-**谁在干活**：`paperstorm_memory_v56.py`。
+**谁在干活**：`research_longterm_memory.py`。
 
 **参数设计（大白话）**——这里把"写入"参数也一起讲了（对话结束会用到）：
 - **三档置信**：你明确说"请记住"的事 0.96；你的偏好、程序性规则 0.88；试探性内容 0.70。
@@ -99,7 +99,7 @@
 
 ## 第 5 步：三路分支——知识问题走检索
 
-**先讲这张图**：到这里主编排图开始"分岔"。`paperstorm_langgraph_v45.py` 是整场对话的路线图——**10 个节点 + 3 个岔路口**，状态里流转：消息、话题、意图判定、记忆命中、知识检索结果、证据判定、调研结果、答案、引用、依据标记、追踪号等。
+**先讲这张图**：到这里主编排图开始"分岔"。`research_langgraph.py` 是整场对话的路线图——**10 个节点 + 3 个岔路口**，状态里流转：消息、话题、意图判定、记忆命中、知识检索结果、证据判定、调研结果、答案、引用、依据标记、追踪号等。
 
 第一个岔路口按意图分三路：闲聊 → 直接聊；记忆类 → 拿记忆答；知识类（本例）→ 查知识库。
 
@@ -107,7 +107,7 @@
 2. 有 → 从任务产物建索引，混合检索取前 3 条
 3. 没有 → 结果为空（本例如此）
 
-**谁在干活**：`paperstorm_qa.py`（知识库问答）+ `paperstorm_retrieval_v41.py`（混合检索引擎）+ `paperstorm_retrieval_runtime.py` / `common.py`（检索运行时和公共件）。
+**谁在干活**：`research_kb_qa.py`（知识库问答）+ `research_retrieval_index.py`（混合检索引擎）+ `research_retrieval_runtime.py` / `common.py`（检索运行时和公共件）。
 
 **参数设计（大白话）**——混合检索四层：
 1. **字面匹配（BM25）**：按词频算相似。英文保词组、中文拆单字+双字；提问套话（"请问/为什么"）先滤掉。
@@ -135,14 +135,14 @@
 
 提交调研任务，五个环节：
 
-**A. 进入调研前，先讲"装配工"**（`paperstorm_graph_adapter_v45.py`）：把三样东西装好——**检查点**（SQLite 断点续跑：每个节点跑完存一次快照到本地文件，连接长期持有、跨进程重启也能恢复；**为什么**：调研十几步跑几分钟，中间崩了从头再来太亏，重启后同线程号接着跑；连接失败降级进程内检查点）、**三源检索**、**全文回调 + skill 注入**。
+**A. 进入调研前，先讲"装配工"**（`research_graph_adapter.py`）：把三样东西装好——**检查点**（SQLite 断点续跑：每个节点跑完存一次快照到本地文件，连接长期持有、跨进程重启也能恢复；**为什么**：调研十几步跑几分钟，中间崩了从头再来太亏，重启后同线程号接着跑；连接失败降级进程内检查点）、**三源检索**、**全文回调 + skill 注入**。
 
 **B. 检索器（三种数据源）**：
-1. **PubMed**（`paperstorm_pubmed.py`）：三步取数——esearch（关键词搜文献编号）→ esummary（批量拿标题/期刊/日期/作者/**PMC 编号**）→ efetch（批量拿摘要）。每次取 **3 条**；请求间隔 **0.4 秒**（节流防限流）；没 API Key 也能用。**返回格式和另外两源统一**（链接、标题、摘要、片段、元数据），下游代码无感。
+1. **PubMed**（`research_pubmed.py`）：三步取数——esearch（关键词搜文献编号）→ esummary（批量拿标题/期刊/日期/作者/**PMC 编号**）→ efetch（批量拿摘要）。每次取 **3 条**；请求间隔 **0.4 秒**（节流防限流）；没 API Key 也能用。**返回格式和另外两源统一**（链接、标题、摘要、片段、元数据），下游代码无感。
 2. **arXiv**（`rm.py`）：调官方接口（按相关性排序、降序），拿标题、摘要、作者、分类、PDF 直链。
 3. **本地 PDF**（`rm.py`）：扫指定目录，pypdf 提全文，滑窗切块（**1200 字符一块、重叠 150**），按词重合打分。
 
-**C. 全文获取层（自主决策点 2——拿不到就自己想办法，但要合规）**（`paperstorm_fulltext.py`）：
+**C. 全文获取层（自主决策点 2——拿不到就自己想办法，但要合规）**（`research_fulltext.py`）：
 系统对命中的文献，按优先级尝试拿全文：
 1. **文本接口优先**（不产生文件、最干净）：有 PMC 编号 → PMC 文本接口直接返回全文；没有但有 PubMed 编号 → Europe PMC 文本接口拿全文文字。拿到返回前 800 字符预览。
 2. **白名单下载（自动放行，不审批）**：下载链接来自权威源（PMC、Europe PMC、arXiv）→ 自动下载；仍做三重校验——内容类型必须 PDF、大小上限 **20MB**、下载后验文件头（**%PDF**）。
@@ -151,7 +151,7 @@
 
 **审批队列的状态流转**：待审批 → 通过 → 下载中 → 已入库 / 下载失败；待审批 → 拒绝（只保留链接）。全程审计：谁批的、从哪下的、下成什么样。**审批只覆盖非白名单下载，白名单权威源自动放行——日常使用几乎无感。** 审批库与调研链路、治理面板共用同一个 SQLite 文件——调研中申请的审批，接口能查到能批，闭环可见。
 
-**D. 多角色调研循环（核心大戏）——问、答、写、审四个角色**（`paperstorm_research_loop.py`）：
+**D. 多角色调研循环（核心大戏）——问、答、写、审四个角色**（`research_loop.py`）：
 在 LangGraph 里建一个子图，七个节点对应四个角色：
 1. **生成视角**——让模型想 1~3 个互补角度（机制/临床/安全这类），顺带输出一份"并行计划"（哪些子任务独立、建议并发数）。命中 skill 就把 skill 内容拼进提示词。模型输出坏了 → 回退默认（1 视角、并发 1）。
 2. **作家 Agent（问）**——带视角提问、补漏不重复；觉得够了说"我没问题了"；装傻不结束就 **3 轮封顶**。
@@ -269,7 +269,7 @@
 **五层工作集**：固定提示（25% 预算）/ 活跃对话（35%）/ 摘要（20%）/ 记忆与证据（12%+35%）/ 产物（8%）。
 **参数**：总预算 **4096** token、输出预留 **768**、软水位 **0.72**（触发压缩）、硬水位 **0.9**（强制压缩）、最近 **6 条**。
 **压缩**：压前先还原旧摘要原文（防摘要压摘要误差累积）；摘要带血统链；原文存 SQLite 按压缩号 **100% 还原**。**为什么**：用户可能反悔，压缩掉的原文要能查回原话。
-**谁在用**：会话层（`paperstorm_chat_agent.py` 管理的完整会话——建会话/发消息/压缩/还原/重新生成；已接出 HTTP 接口：`/api/sessions` 系列 8 个端点，2026-08-12 补上）。
+**谁在用**：会话层（`research_chat_agent.py` 管理的完整会话——建会话/发消息/压缩/还原/重新生成；已接出 HTTP 接口：`/api/sessions` 系列 8 个端点，2026-08-12 补上）。
 
 ## 模块 9：生产控制面（单用户为什么全保留）
 
@@ -293,46 +293,46 @@
 ```
 my-agent/
 ├─ api.py                              # 接口层：11 个接口 + SSE
-├─ start_paperstorm_service.py         # 启动脚本（含预检；实际启动走 uvicorn api:app）
+├─ start_research_service.py         # 启动脚本（含预检；实际启动走 uvicorn api:app）
 ├─ requirements.txt / setup.py / README.md   # 依赖 / 打包 / 说明
-├─ knowledge_storm/                    # 核心包（28 个文件）
-│  ├─ paperstorm_service.py            # 服务层：任务生命周期 + 双入口调度 + 治理查询
-│  ├─ paperstorm_production_v45.py     # 治理层：幂等/熔断/审计/追踪/权限 + 生产运行时
-│  ├─ paperstorm_graph_adapter_v45.py  # 适配层：检查点 + 三源 + 全文 + skill 装配
-│  ├─ paperstorm_langgraph_v45.py      # 编排层：主编排图（10 节点 3 路由 + 重试）
-│  ├─ paperstorm_intent_router.py      # 决策层：意图路由（规则 + 大模型）
-│  ├─ paperstorm_router_llm.py         # 决策层：三个大模型工厂（路由/闲聊/裁判）
-│  ├─ paperstorm_memory_v56.py         # 数据层：长期记忆（五信号/三档置信/版本化）
-│  ├─ paperstorm_context_v56.py        # 数据层：五层上下文引擎（压缩/还原）
-│  ├─ paperstorm_retrieval_v41.py / runtime.py / common.py  # 检索层：混合检索引擎
-│  ├─ paperstorm_qa.py                 # 检索层：知识库问答（产物建库再查）
-│  ├─ paperstorm_pubmed.py             # 检索层：PubMed 检索器（三步取数）
+├─ research_agent/                    # 核心包（28 个文件）
+│  ├─ research_service.py            # 服务层：任务生命周期 + 双入口调度 + 治理查询
+│  ├─ research_production.py     # 治理层：幂等/熔断/审计/追踪/权限 + 生产运行时
+│  ├─ research_graph_adapter.py  # 适配层：检查点 + 三源 + 全文 + skill 装配
+│  ├─ research_langgraph.py      # 编排层：主编排图（10 节点 3 路由 + 重试）
+│  ├─ research_intent_router.py      # 决策层：意图路由（规则 + 大模型）
+│  ├─ research_router_llm.py         # 决策层：三个大模型工厂（路由/闲聊/裁判）
+│  ├─ research_longterm_memory.py         # 数据层：长期记忆（五信号/三档置信/版本化）
+│  ├─ research_context.py        # 数据层：五层上下文引擎（压缩/还原）
+│  ├─ research_retrieval_index.py / runtime.py / common.py  # 检索层：混合检索引擎
+│  ├─ research_kb_qa.py                 # 检索层：知识库问答（产物建库再查）
+│  ├─ research_pubmed.py             # 检索层：PubMed 检索器（三步取数）
 │  ├─ rm.py                            # 检索层：检索器集合（arXiv/本地 PDF 等）
-│  ├─ paperstorm_fulltext.py           # 内容层：全文获取（文本接口/白名单/审批）
-│  ├─ paperstorm_research_loop.py      # 内容层：多角色调研子图（问/答/写/审 + 6 条硬边界）
-│  ├─ paperstorm_skill.py              # 内容层：skill 领域增强（扫描/匹配/注入）
-│  ├─ paperstorm_research_qa.py        # 决策层：另一套证据裁判（规则打分 + 三词判定）
-│  ├─ paperstorm_chat_agent.py         # 会话层：完整会话管理（压缩/还原等）
-│  ├─ paperstorm_document_v41.py       # 工具层：PDF 提取与切块
-│  ├─ paperstorm_tools.py              # 工具层：自研工具协议
-│  ├─ paperstorm_memory.py             # 数据层：另一套记忆实现（会话层用）
+│  ├─ research_fulltext.py           # 内容层：全文获取（文本接口/白名单/审批）
+│  ├─ research_loop.py      # 内容层：多角色调研子图（问/答/写/审 + 6 条硬边界）
+│  ├─ research_skill.py              # 内容层：skill 领域增强（扫描/匹配/注入）
+│  ├─ research_qa.py        # 决策层：另一套证据裁判（规则打分 + 三词判定）
+│  ├─ research_chat_agent.py         # 会话层：完整会话管理（压缩/还原等）
+│  ├─ research_document_v41.py       # 工具层：PDF 提取与切块
+│  ├─ research_tools.py              # 工具层：自研工具协议
+│  ├─ research_memory.py             # 数据层：另一套记忆实现（会话层用）
 │  ├─ lm.py                            # 兼容层：大模型抽象（litellm 统一网关 + 两层缓存）
 │  ├─ utils.py                         # 工具层：加载 Key 等
-│  └─ paperstorm_benchmarks.py / eval*.py / multi_task_benchmark.py  # 评测层
+│  └─ research_benchmarks.py / eval*.py / multi_task_benchmark.py  # 评测层
 ├─ evaluation/public_benchmarks/       # 评测层：公开数据集（SciFact/QASPER/LongMemEval/LongBench）
 └─ skills/                             # skill 目录（当前为空，放 SKILL.md 即生效）
 ```
 
 ## 其他文件（不在主线，独立可用）
 
-1. **`paperstorm_research_qa.py`（另一套证据裁判 Agent）**——规则打分（证据条数每条 +15 封顶 30、引用条数 +10 封顶 20、关键词重叠 +8 封顶 25、主题重叠 +5 封顶 15、期望关键词 +5 封顶 10、实质相关奖励 +20、排除词惩罚 -15；四道硬门槛）+ 大模型三词判定（判可以抬到 80 分、判不够压到 40 分）。独立入口 ask_research_agent；主编排图用的是更轻的内联裁判，两套并存。
-2. **`paperstorm_document_v41.py`（PDF 处理）**——PDF 提取 + 三策略切块，独立复用件。
-3. **`paperstorm_tools.py`（工具协议）**——自研"工具说明书"模式，预留注册层，主链未挂接。
-4. **`paperstorm_memory.py`（另一套记忆）**——与记忆 v56 并存的一套实现，会话层使用。
+1. **`research_qa.py`（另一套证据裁判 Agent）**——规则打分（证据条数每条 +15 封顶 30、引用条数 +10 封顶 20、关键词重叠 +8 封顶 25、主题重叠 +5 封顶 15、期望关键词 +5 封顶 10、实质相关奖励 +20、排除词惩罚 -15；四道硬门槛）+ 大模型三词判定（判可以抬到 80 分、判不够压到 40 分）。独立入口 ask_research_agent；主编排图用的是更轻的内联裁判，两套并存。
+2. **`research_document_v41.py`（PDF 处理）**——PDF 提取 + 三策略切块，独立复用件。
+3. **`research_tools.py`（工具协议）**——自研"工具说明书"模式，预留注册层，主链未挂接。
+4. **`research_memory.py`（另一套记忆）**——与记忆 v56 并存的一套实现，会话层使用。
 5. **`lm.py`（大模型抽象）**——统一接口（`LitellmModel`：litellm 统一网关，支持 100+ provider）+ 两层缓存（内存最近 3000 条 + 磁盘跨进程缓存）+ 用量记账。纯自研实现，无 dspy 依赖。
 6. **`utils.py`**——加载 Key 等小工具。
 7. **评测体系**——自研运行器（seed 回归 / 消融对比 / 三场景评测）+ 公开数据集评测（SciFact / QASPER / LongMemEval / LongBench；指标：召回率 / MRR / nDCG@K / 置信区间）。**定位：验收标准——架构迭代后跑原评测不退化。**
-8. **`start_paperstorm_service.py`**——带端口预检的启动脚本；当前实际启动走 `uvicorn api:app`。
+8. **`start_research_service.py`**——带端口预检的启动脚本；当前实际启动走 `uvicorn api:app`。
 9. **`requirements.txt` / `setup.py` / `README.md`**——依赖、打包、说明。
 
 ---

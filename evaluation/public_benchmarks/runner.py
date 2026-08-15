@@ -1,4 +1,4 @@
-"""Shared PaperStorm retrieval runner for public datasets."""
+"""Shared Research retrieval runner for public datasets."""
 
 import hashlib
 import json
@@ -8,7 +8,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from ...paperstorm_retrieval_v41 import HybridPaperIndex
+from ...research_retrieval_index import HybridPaperIndex
 from .metrics import retrieval_metrics
 from .report import write_benchmark_artifacts
 
@@ -20,7 +20,7 @@ class HashEmbeddingProvider:
 
     def __init__(self, dim=128):
         self.dim = int(dim)
-        self.name = "paperstorm-hash-smoke-{0}".format(self.dim)
+        self.name = "research-hash-smoke-{0}".format(self.dim)
 
     def embed(self, texts):
         return [self.embed_query(text) for text in texts]

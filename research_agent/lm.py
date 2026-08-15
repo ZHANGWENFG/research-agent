@@ -1,13 +1,13 @@
 """
-STORM 语言模型抽象层
+ResearchAgent 语言模型抽象层
 ====================
 
-这是整个 STORM 系统中**最核心的基础设施模块之一**，负责将 LLM 调用抽象为统一接口。
+这是整个 ResearchAgent 系统中**最核心的基础设施模块之一**，负责将 LLM 调用抽象为统一接口。
 理解这个文件是理解"Agent 系统为什么要抽象 LM 层"的关键。
 
 整体架构:
 ┌──────────────────────────────────────────────────────────────┐
-│  STORMWikiRunner (engine.py)                                │
+│  ResearchRunner (engine.py)                                 │
 │  需要调用 LLM 做：对话模拟、大纲生成、文章撰写、润色等           │
 │  但它不关心底层是哪个 model / provider                         │
 └────────────────────┬─────────────────────────────────────────┘
@@ -134,7 +134,7 @@ class LM:
         self,
         model,
         model_type="chat",  # "chat" 或 "text"，走 litellm 的不同 API 端点
-        temperature=0.0,     # STORM 场景不需要创造性，默认 0.0
+        temperature=0.0,     # ResearchAgent 场景不需要创造性，默认 0.0
         max_tokens=1000,
         cache=True,          # 默认开启缓存（省钱 + 可复现）
         **kwargs,
@@ -346,7 +346,7 @@ def _inspect_history(lm, n: int = 1):
 # ====================================================================
 # LitellmModel — 推荐的 LLM 封装类 (v1.1.0+)
 # ====================================================================
-# 这是 STORM 当前推荐的 LLM 封装类，底层直接走 litellm。
+# 这是 ResearchAgent 当前推荐的 LLM 封装类，底层直接走 litellm。
 #
 # 为什么推荐用它而不是下面的旧类？
 # 1. litellm 统一了 100+ provider 的接口差异，新增 provider 无需写新类
@@ -373,7 +373,7 @@ class LitellmModel(LM):
         **kwargs,
     ):
         super().__init__(model=model, api_key=api_key, model_type=model_type, **kwargs)
-        # token 统计: 线程安全的计数器（因为 STORM 可能多线程并发调 LLM）
+        # token 统计: 线程安全的计数器（因为 ResearchAgent 可能多线程并发调 LLM）
         self._token_usage_lock = threading.Lock()
         self.prompt_tokens = 0
         self.completion_tokens = 0
@@ -389,7 +389,7 @@ class LitellmModel(LM):
     def get_usage_and_reset(self):
         """
         获取累计 token 用量并重置计数器。
-        这个方法在 STORM pipeline 每个阶段结束时被调用，用于统计各阶段消耗。
+        这个方法在 ResearchAgent pipeline 每个阶段结束时被调用，用于统计各阶段消耗。
         返回格式: {"model_name": {"prompt_tokens": N, "completion_tokens": M}}
         """
         usage = {

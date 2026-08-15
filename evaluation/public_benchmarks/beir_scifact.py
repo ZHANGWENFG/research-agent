@@ -129,7 +129,7 @@ def _download_file(url, target, timeout=60):
     except ImportError as exc:
         raise RuntimeError("verified benchmark downloads require certifi") from exc
     request = urllib.request.Request(
-        url, headers={"User-Agent": "PaperStorm/5.5 public-benchmark"}
+        url, headers={"User-Agent": "Research/5.5 public-benchmark"}
     )
     context = ssl.create_default_context(cafile=certifi.where())
     with urllib.request.urlopen(request, context=context, timeout=timeout) as response:

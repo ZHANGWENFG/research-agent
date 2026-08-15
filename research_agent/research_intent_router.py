@@ -1,4 +1,4 @@
-"""Intent routing and tool decision layer for PaperStorm chat.
+"""Intent routing and tool decision layer for Research chat.
 
 The router is intentionally small and dependency-light: production deployments
 can inject an LLM callable, while local tests and fake demos use a deterministic
@@ -21,7 +21,7 @@ ROUTER_SCHEMA = {
 }
 
 
-class PaperStormIntentRouter:
+class ResearchIntentRouter:
     """Route a chat turn into an intent, tool decision, and rewritten query."""
 
     def __init__(

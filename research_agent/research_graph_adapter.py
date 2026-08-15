@@ -1,10 +1,10 @@
-"""主编排图适配器（改造新增）：v44 兼容接口包装 v45 自研图。
+"""主编排图适配器（改造新增）：兼容接口包装自研主编排图。
 
-生产运行时（PaperStormProductionRuntimeV45）原本以
+生产运行时（ResearchProductionRuntime）原本以
   graph_runtime_class(root_dir, task_service, intent_router=, chat_llm=, evidence_judge=)
 的方式实例化 v44 运行时并调用 invoke(**payload) 返回 dict（含 node_events 等）。
-本适配器保持同一接口，内部组装 v45 主编排图（PaperStormLangGraphV45）：
-  - memory_service：LongTermMemoryService（v56）
+本适配器保持同一接口，内部组装 主编排图（ResearchLangGraph）：
+  - memory_service：LongTermMemoryService
   - kb_service：task_service.query_knowledge_base 包装
   - research_runner：自研多角色循环 run_research_loop
   - memory_writer：LongTermMemoryService.ingest_message 包装
@@ -20,8 +20,8 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
-class PaperStormGraphAdapterV45:
-    """v44 兼容接口的 v45 图适配器（供生产运行时直接使用）。"""
+class ResearchGraphAdapter:
+    """兼容接口的图适配器（供生产运行时直接使用）。"""
 
     def __init__(
         self,
@@ -40,23 +40,23 @@ class PaperStormGraphAdapterV45:
         self.retriever = retriever
         self._runtime = None
 
-    def _build_runtime(self, run_mode: str = "paperstorm"):
-        from .paperstorm_langgraph_v45 import PaperStormLangGraphV45
-        from .paperstorm_memory_v56 import LongTermMemoryService
-        from .paperstorm_research_loop import run_research_loop
-        from .paperstorm_router_llm import (
+    def _build_runtime(self, run_mode: str = "research"):
+        from .research_langgraph import ResearchLangGraph
+        from .research_longterm_memory import LongTermMemoryService
+        from .research_loop import run_research_loop
+        from .research_router_llm import (
             build_chat_llm_callable,
             build_intent_router,
             build_judge_llm_callable,
         )
 
-        real_mode = run_mode == "paperstorm"
+        real_mode = run_mode == "research"
         intent_router = self.intent_router or build_intent_router(run_mode=run_mode)
         chat_llm = self.chat_llm or build_chat_llm_callable(enabled=real_mode)
         evidence_judge = self.evidence_judge or build_judge_llm_callable(
             enabled=real_mode
         )
-        memory_service = LongTermMemoryService(self.root_dir / "memory_service_v56")
+        memory_service = LongTermMemoryService(self.root_dir / "memory_service")
 
         def kb_query(question: str, top_k: int = 3, task_id: str = ""):
             try:
@@ -69,14 +69,14 @@ class PaperStormGraphAdapterV45:
 
         def research_runner(topic: str):
             """深度调研：三源检索切换 + 全文获取 + skill 注入（与 service 主线一致）。"""
-            from .paperstorm_fulltext import (
+            from .research_fulltext import (
                 ApprovalQueue,
                 download_file,
                 fetch_europepmc_fulltext,
                 fetch_pmc_fulltext,
                 is_whitelisted,
             )
-            from .paperstorm_skill import inject_skill, match_skills, scan_skills
+            from .research_skill import inject_skill, match_skills, scan_skills
 
             retriever_name = str(self.retriever or "pubmed").strip().lower()
             if retriever_name in ("arxiv", "arxivrm"):
@@ -88,7 +88,7 @@ class PaperStormGraphAdapterV45:
 
                 rm = LocalPDFRM(k=3, pdf_dir=str(self.task_service.root_dir / "pdfs"))
             else:
-                from .paperstorm_pubmed import PubMedRM
+                from .research_pubmed import PubMedRM
 
                 rm = PubMedRM(k=3)
 
@@ -180,7 +180,7 @@ class PaperStormGraphAdapterV45:
 
             checkpointer = InMemorySaver()
 
-        return PaperStormLangGraphV45(
+        return ResearchLangGraph(
             intent_router=intent_router,
             memory_service=memory_service,
             kb_service=kb_query,
@@ -192,7 +192,7 @@ class PaperStormGraphAdapterV45:
         )
 
     def invoke(self, **payload) -> Dict[str, Any]:
-        run_mode = payload.get("run_mode", "paperstorm")
+        run_mode = payload.get("run_mode", "research")
         retriever = payload.get("retriever") or self.retriever
         if retriever:
             self.retriever = retriever

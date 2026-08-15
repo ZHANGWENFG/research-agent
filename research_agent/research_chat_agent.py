@@ -6,18 +6,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .paperstorm_context_v56 import ContextEngine, ContextEngineConfig, ContextEventStore
-from .paperstorm_intent_router import PaperStormIntentRouter
-from .paperstorm_memory import PaperStormMemoryStore
-from .paperstorm_memory_v56 import LongTermMemoryService
+from .research_context import ContextEngine, ContextEngineConfig, ContextEventStore
+from .research_intent_router import ResearchIntentRouter
+from .research_memory import ResearchMemoryStore
+from .research_longterm_memory import LongTermMemoryService
 
 
-class PaperStormChatAgent:
+class ResearchChatAgent:
     """File-backed conversational layer over ResearchQAAgent."""
 
-    def __init__(self, task_service, intent_router: Optional[PaperStormIntentRouter] = None):
+    def __init__(self, task_service, intent_router: Optional[ResearchIntentRouter] = None):
         self.task_service = task_service
-        self.intent_router = intent_router or PaperStormIntentRouter()
+        self.intent_router = intent_router or ResearchIntentRouter()
         self.chat_dir = Path(task_service.root_dir) / "chat_sessions"
         self.chat_dir.mkdir(parents=True, exist_ok=True)
         self._cancelled_ids = set()
@@ -44,7 +44,7 @@ class PaperStormChatAgent:
         self._long_term_memory().set_enabled(memory_namespace, memory_enabled)
         session = {
             "chat_id": chat_id,
-            "title": title or topic or "PaperStorm Chat",
+            "title": title or topic or "Research Chat",
             "topic": topic,
             "run_mode": run_mode,
             "retriever": retriever,
@@ -67,7 +67,7 @@ class PaperStormChatAgent:
             "memory_context": {},
             "long_term_memory": {},
             "memory_write": {"status": "not_evaluated"},
-            "conversation_runtime": "paperstorm-production-v5.0",
+            "conversation_runtime": "research-production-v1.0",
             "graph_run": {},
             "created_at": _now(),
             "updated_at": _now(),
@@ -91,7 +91,7 @@ class PaperStormChatAgent:
             sessions.append(
                 {
                     "chat_id": session.get("chat_id") or path.stem,
-                    "title": session.get("title") or "PaperStorm Chat",
+                    "title": session.get("title") or "Research Chat",
                     "run_mode": session.get("run_mode", ""),
                     "retriever": session.get("retriever", ""),
                     "message_count": len(messages),
@@ -260,7 +260,7 @@ class PaperStormChatAgent:
         session["long_term_memory"] = long_term_memory
         session["memory_write"] = memory_write
         session["conversation_runtime"] = graph_run.get(
-            "runtime", "paperstorm-production-v5.0"
+            "runtime", "research-production-v1.0"
         )
         session["graph_run"] = graph_run
         session["updated_at"] = _now()
@@ -350,7 +350,7 @@ class PaperStormChatAgent:
         return messages[-size:]
 
     def _build_memory(self, session: Dict, query: str):
-        memory = PaperStormMemoryStore()
+        memory = ResearchMemoryStore()
         topic = session.get("topic") or query
         if topic:
             memory.remember_semantic(
@@ -395,7 +395,7 @@ class PaperStormChatAgent:
         )
 
     def _long_term_memory(self):
-        return LongTermMemoryService(Path(self.task_service.root_dir) / "memory_service_v56")
+        return LongTermMemoryService(Path(self.task_service.root_dir) / "memory_service")
 
     def _run_conversation_graph(self, session: Dict, user_message: Dict, context_window):
         return self.task_service.invoke_conversation_graph(
@@ -616,7 +616,7 @@ def _active_context_meter(raw_meter: Dict, active_meter: Dict):
 
 
 def _graph_answer_payload(graph_run: Dict):
-    """Adapt the V4.4 graph result to the stable chat response contract."""
+    """Adapt the graph result to the stable chat response contract."""
     router_decision = graph_run.get("router_decision") or {}
     evidence_grade = graph_run.get("evidence_grade") or {}
     route = graph_run.get("route") or ""
@@ -667,13 +667,13 @@ def _casual_chat_answer(
         )
     elif "模型" in text or "你是谁" in text or "身份" in text:
         answer = (
-            "我是 PaperStorm Research Chat Agent 的本地演示层，不是一个单独训练出来的新基础模型。"
+            "我是 Research Research Chat Agent 的本地演示层，不是一个单独训练出来的新基础模型。"
             "真实生成能力取决于你配置的 LLM provider；当前 fake 模式使用可复现的本地示例回答，"
-            "paperstorm 模式才会调用真实检索和模型。"
+            "research 模式才会调用真实检索和模型。"
         )
     elif "上下文" in text or "压缩" in text or "记忆" in text:
         answer = (
-            "V4.2 使用 Token 驱动的可恢复 Context Engine。原始消息按 append-only JSONL 保存，"
+            "项目使用 Token 驱动的可恢复 Context Engine。原始消息按 append-only JSONL 保存，"
             "达到阈值后先把旧工具大输出替换为 artifact 引用，再生成包含目标、约束、决定、实体、"
             "来源、错误和待办的结构化交接摘要；系统消息、首轮目标和最近完整消息始终保留。"
             "Dashboard 可以查看 Context Meter、压缩事件，并按 compaction_id 恢复原始消息视图。"
@@ -681,12 +681,12 @@ def _casual_chat_answer(
     elif "网页" in text or "界面" in text or "按钮" in text or "使用" in text or "端口" in text:
         answer = (
             "网页端有两种模式：调研写文章用于 submit/run/poll 生成文章和 trace；聊天问答用于直接提问。"
-            "fake 模式不需要 API key，适合本地演示；paperstorm 模式会调用真实检索和 LLM。"
-            "如果你更新过代码，请重启 start_paperstorm_service.py，否则浏览器可能还连着旧服务。"
+            "fake 模式不需要 API key，适合本地演示；research 模式会调用真实检索和 LLM。"
+            "如果你更新过代码，请重启 start_research_service.py，否则浏览器可能还连着旧服务。"
         )
     else:
         answer = (
-            "你好，我是 PaperStorm Research Chat Agent。"
+            "你好，我是 Research Research Chat Agent。"
             "我可以像聊天机器人一样解释项目用法，也可以在论文调研场景里自动检索、"
             "生成带引用的回答，并展示上下文窗口、压缩摘要、记忆命中和 trace。"
             "如果你问的是具体技术问题，我会优先复用已有知识；证据不足时会自动补充调研。"

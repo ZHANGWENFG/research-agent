@@ -1,4 +1,5 @@
 import json
+import threading
 import logging
 import os
 import re
@@ -8,17 +9,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .paperstorm_eval import EvalCase, evaluate_run, write_scorecards
-from .paperstorm_qa import PaperStormKnowledgeBase, write_qa_artifact
+from .research_eval import EvalCase, evaluate_run, write_scorecards
+from .research_kb_qa import ResearchKnowledgeBase, write_qa_artifact
 
 logger = logging.getLogger(__name__)
 
 
-class PaperStormTaskService:
-    """File-backed service core for PaperStorm task APIs."""
+class ResearchTaskService:
+    """File-backed service core for Research task APIs."""
 
     def __init__(self, root_dir, max_concurrent_tasks: int = 1, pipeline_runner=None):
-        from .paperstorm_benchmarks import BenchmarkRunManager
+        from .research_benchmarks import BenchmarkRunManager
 
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -27,6 +28,7 @@ class PaperStormTaskService:
         self.tasks_dir.mkdir(exist_ok=True)
         self.results_dir.mkdir(exist_ok=True)
         self.max_concurrent_tasks = max(1, int(max_concurrent_tasks))
+        self._task_slot = threading.BoundedSemaphore(self.max_concurrent_tasks)
         self.pipeline_runner = pipeline_runner
         self.benchmark_runs = BenchmarkRunManager(self.root_dir)
 
@@ -100,6 +102,14 @@ class PaperStormTaskService:
         )
 
     def run_task(self, task_id: str):
+        # 并发上限：同时最多跑 max_concurrent_tasks 个任务，其余排队等待
+        self._task_slot.acquire()
+        try:
+            return self._run_task_locked(task_id)
+        finally:
+            self._task_slot.release()
+
+    def _run_task_locked(self, task_id: str):
         state = self._read_state(task_id)
         state["status"] = "running"
         state["started_at"] = _now()
@@ -110,11 +120,11 @@ class PaperStormTaskService:
                 raise RuntimeError("simulated task failure for service testing")
             if state.get("run_mode") == "manual":
                 return state
-            if state.get("run_mode") == "paperstorm":
+            if state.get("run_mode") == "research":
                 self._run_research_loop(state)
             elif state.get("run_mode") != "fake":
                 raise ValueError(
-                    "Supported run modes are 'fake', 'paperstorm', 'manual', and 'fail'."
+                    "Supported run modes are 'fake', 'research', 'manual', and 'fail'."
                 )
             else:
                 self._run_fake_research(state)
@@ -242,7 +252,7 @@ class PaperStormTaskService:
 
     def get_trace(self, task_id: str):
         state = self._read_state(task_id)
-        trace_path = Path(state["output_dir"]) / "paperstorm_trace.jsonl"
+        trace_path = Path(state["output_dir"]) / "research_trace.jsonl"
         return {"task_id": task_id, "events": _load_jsonl(trace_path)}
 
     def get_dashboard_bundle(self, task_id: str):
@@ -250,9 +260,9 @@ class PaperStormTaskService:
         output_dir = Path(state["output_dir"])
         return {
             "project": {
-                "name": "PaperStorm Agent",
+                "name": "Research Agent",
                 "version": "v5.6",
-                "description": "Service-backed PaperStorm dashboard snapshot",
+                "description": "Service-backed Research dashboard snapshot",
             },
             "tasks": [state],
             "article": self.get_article(task_id),
@@ -272,16 +282,16 @@ class PaperStormTaskService:
         }
 
     def query_knowledge_base(self, task_id: str, question: str, top_k: int = 3):
-        from .paperstorm_router_llm import build_chat_llm_callable
+        from .research_router_llm import build_chat_llm_callable
 
         state = self._read_state(task_id)
         output_dir = Path(state["output_dir"])
-        kb = PaperStormKnowledgeBase.from_run_dir(output_dir)
+        kb = ResearchKnowledgeBase.from_run_dir(output_dir)
         answer = kb.answer_question(
             question,
             top_k=top_k,
             answer_generator=build_chat_llm_callable(
-                enabled=state.get("run_mode") == "paperstorm"
+                enabled=state.get("run_mode") == "research"
             ),
         )
         write_qa_artifact(output_dir, answer)
@@ -301,7 +311,7 @@ class PaperStormTaskService:
         forbidden_keywords: Optional[List[str]] = None,
         **options,
     ):
-        from .paperstorm_research_qa import ResearchQAAgent
+        from .research_qa import ResearchQAAgent
 
         return ResearchQAAgent(self).ask(
             question=question,
@@ -333,9 +343,9 @@ class PaperStormTaskService:
         memory_enabled: bool = True,
         **options,
     ):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).create_session(
+        return ResearchChatAgent(self).create_session(
             title=title,
             topic=topic,
             run_mode=run_mode,
@@ -352,44 +362,44 @@ class PaperStormTaskService:
         )
 
     def get_chat_session(self, chat_id: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).get_session(chat_id)
+        return ResearchChatAgent(self).get_session(chat_id)
 
     def send_chat_message(self, chat_id: str, message: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).send_message(chat_id, message)
+        return ResearchChatAgent(self).send_message(chat_id, message)
 
     def list_chat_sessions(self, limit: int = 50):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).list_sessions(limit=limit)
+        return ResearchChatAgent(self).list_sessions(limit=limit)
 
     def regenerate_chat_message(self, chat_id: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).regenerate_last(chat_id)
+        return ResearchChatAgent(self).regenerate_last(chat_id)
 
     def stop_chat_generation(self, chat_id: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).stop_generation(chat_id)
+        return ResearchChatAgent(self).stop_generation(chat_id)
 
     def get_chat_context(self, chat_id: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).get_context(chat_id)
+        return ResearchChatAgent(self).get_context(chat_id)
 
     def compact_chat_context(self, chat_id: str, force: bool = True):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).compact_context(chat_id, force=force)
+        return ResearchChatAgent(self).compact_context(chat_id, force=force)
 
     def restore_chat_context(self, chat_id: str, compaction_id: str):
-        from .paperstorm_chat_agent import PaperStormChatAgent
+        from .research_chat_agent import ResearchChatAgent
 
-        return PaperStormChatAgent(self).restore_context(chat_id, compaction_id)
+        return ResearchChatAgent(self).restore_context(chat_id, compaction_id)
 
     def create_memory(self, **payload):
         return self._memory_service_v43().upsert(**payload)
@@ -422,18 +432,18 @@ class PaperStormTaskService:
         return self._memory_service_v43().set_enabled(namespace, enabled)
 
     def invoke_conversation_graph(self, **payload):
-        return self._production_runtime_v45().invoke(**payload)
+        return self._production_runtime().invoke(**payload)
 
     def get_conversation_graph_spec(self):
-        return self._production_runtime_v45().get_graph_spec()
+        return self._production_runtime().get_graph_spec()
 
     def get_conversation_thread_state(
         self, thread_id: str, tenant_id: str = "local", user_id: str = "local-user"
     ):
-        self._production_control_v45().authorize(
+        self._production_control().authorize(
             tenant_id, user_id, "conversation_thread", thread_id, "read_state"
         )
-        return self._production_runtime_v45().get_thread_state(thread_id)
+        return self._production_runtime().get_thread_state(thread_id)
 
     def get_conversation_thread_history(
         self,
@@ -442,33 +452,33 @@ class PaperStormTaskService:
         tenant_id: str = "local",
         user_id: str = "local-user",
     ):
-        self._production_control_v45().authorize(
+        self._production_control().authorize(
             tenant_id, user_id, "conversation_thread", thread_id, "read_history"
         )
-        return self._production_runtime_v45().get_thread_history(thread_id, limit=limit)
+        return self._production_runtime().get_thread_history(thread_id, limit=limit)
 
     def get_production_trace(self, trace_id: str, tenant_id: str, user_id: str):
-        self._production_control_v45().authorize(
+        self._production_control().authorize(
             tenant_id, user_id, "trace", trace_id, "read"
         )
         return {
             "trace_id": trace_id,
-            "spans": self._production_control_v45().list_spans(trace_id),
+            "spans": self._production_control().list_spans(trace_id),
         }
 
     def get_production_status(self):
-        return self._production_control_v45().status()
+        return self._production_control().status()
 
     def list_production_audit_events(self, limit: int = 100):
         """后台治理：操作审计留痕查询（治理面板接口用）。"""
-        return self._production_control_v45().list_audit_events(limit=limit)
+        return self._production_control().list_audit_events(limit=limit)
 
     def list_production_spans(self, trace_id: str):
         """后台治理：按 trace_id 查全链路 Span（治理面板接口用）。"""
-        return self._production_control_v45().list_spans(trace_id)
+        return self._production_control().list_spans(trace_id)
 
-    def import_evaluation_v54_dataset(self, dataset_path: str):
-        from .paperstorm_eval_v54 import AnnotationStore
+    def import_evaluation_dataset(self, dataset_path: str):
+        from .research_eval_pipeline import AnnotationStore
 
         source = Path(dataset_path)
         if not source.exists():
@@ -476,7 +486,7 @@ class PaperStormTaskService:
         dataset = json.loads(source.read_text(encoding="utf-8"))
         if not dataset.get("cases") or not dataset.get("corpus"):
             raise ValueError("v5.4 数据集必须同时包含 cases 和 corpus")
-        root = self._evaluation_v54_root()
+        root = self._evaluation_root()
         target = root / "candidate_dataset.json"
         target.write_text(
             json.dumps(dataset, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -484,10 +494,10 @@ class PaperStormTaskService:
         progress = AnnotationStore(root, dataset).progress()
         return dict(progress, configured=True)
 
-    def get_evaluation_v54_status(self):
-        from .paperstorm_eval_v54 import AnnotationStore
+    def get_evaluation_status(self):
+        from .research_eval_pipeline import AnnotationStore
 
-        dataset = self._evaluation_v54_dataset(required=False)
+        dataset = self._evaluation_dataset(required=False)
         if not dataset:
             return {
                 "configured": False,
@@ -498,13 +508,13 @@ class PaperStormTaskService:
                 "frozen_test_allowed": False,
                 "message": "尚未导入 v5.4 候选数据集。",
             }
-        return dict(AnnotationStore(self._evaluation_v54_root(), dataset).progress(), configured=True)
+        return dict(AnnotationStore(self._evaluation_root(), dataset).progress(), configured=True)
 
-    def list_evaluation_v54_annotations(self, offset: int = 0, limit: int = 50):
-        from .paperstorm_eval_v54 import AnnotationStore
+    def list_evaluation_annotations(self, offset: int = 0, limit: int = 50):
+        from .research_eval_pipeline import AnnotationStore
 
-        dataset = self._evaluation_v54_dataset()
-        store = AnnotationStore(self._evaluation_v54_root(), dataset)
+        dataset = self._evaluation_dataset()
+        store = AnnotationStore(self._evaluation_root(), dataset)
         cases = store.list_cases()
         offset = max(0, int(offset))
         limit = max(1, min(200, int(limit)))
@@ -516,32 +526,32 @@ class PaperStormTaskService:
             "progress": store.progress(),
         }
 
-    def save_evaluation_v54_review(self, case_id: str, review: Dict):
-        from .paperstorm_eval_v54 import AnnotationStore
+    def save_evaluation_review(self, case_id: str, review: Dict):
+        from .research_eval_pipeline import AnnotationStore
 
-        dataset = self._evaluation_v54_dataset()
+        dataset = self._evaluation_dataset()
         payload = dict(review or {}, case_id=case_id)
-        return AnnotationStore(self._evaluation_v54_root(), dataset).save_review(payload)
+        return AnnotationStore(self._evaluation_root(), dataset).save_review(payload)
 
-    def run_evaluation_v54_context(self):
-        from .paperstorm_eval_v54 import (
+    def run_evaluation_context(self):
+        from .research_eval_pipeline import (
             AnnotationStore,
             enrich_context_cases,
             evaluate_context_scenarios,
-            normalize_v54_corpus,
+            normalize_corpus,
         )
 
-        dataset = self._evaluation_v54_dataset()
-        store = AnnotationStore(self._evaluation_v54_root(), dataset)
+        dataset = self._evaluation_dataset()
+        store = AnnotationStore(self._evaluation_root(), dataset)
         reviewed = store.export_reviewed_dataset()["cases"]
         cases = reviewed or store.list_cases()[: min(20, len(dataset.get("cases") or []))]
-        cases = enrich_context_cases(cases, normalize_v54_corpus(dataset))
+        cases = enrich_context_cases(cases, normalize_corpus(dataset))
         report = evaluate_context_scenarios(cases)
         report["trust"] = store.progress()
-        self._write_evaluation_v54_report("context", report)
+        self._write_evaluation_report("context", report)
         return report
 
-    def run_evaluation_v54_retrieval(
+    def run_evaluation_retrieval(
         self,
         embedding: str = "hash",
         top_k: int = 5,
@@ -549,20 +559,20 @@ class PaperStormTaskService:
         candidate_k: int = 20,
         enable_reranker: bool = False,
     ):
-        from .paperstorm_eval_v54 import (
+        from .research_eval_pipeline import (
             AnnotationStore,
-            normalize_v54_corpus,
+            normalize_corpus,
             ranked_document_ids,
             run_retrieval_benchmark,
         )
-        from .paperstorm_retrieval_runtime import _dense_provider
-        from .paperstorm_retrieval_v41 import CrossEncoderReranker, HybridPaperIndex
+        from .research_retrieval_runtime import _dense_provider
+        from .research_retrieval_index import CrossEncoderReranker, HybridPaperIndex
 
-        dataset = self._evaluation_v54_dataset()
-        store = AnnotationStore(self._evaluation_v54_root(), dataset)
+        dataset = self._evaluation_dataset()
+        store = AnnotationStore(self._evaluation_root(), dataset)
         evaluated_dataset = dict(dataset, cases=store.list_cases())
         provider = _dense_provider(embedding)
-        index = HybridPaperIndex(normalize_v54_corpus(dataset), provider)
+        index = HybridPaperIndex(normalize_corpus(dataset), provider)
         requested = list(configurations or ["bm25", "dense", "hybrid"])
         skipped = {}
         reranker = None
@@ -605,61 +615,61 @@ class PaperStormTaskService:
         }
         report["skipped_configurations"] = skipped
         report["trust"] = progress
-        self._write_evaluation_v54_report("retrieval", report)
+        self._write_evaluation_report("retrieval", report)
         return report
 
-    def get_evaluation_v54_latest(self):
-        from .paperstorm_eval_v54 import sanitize_v54_report
+    def get_evaluation_latest(self):
+        from .research_eval_pipeline import sanitize_report
 
-        root = self._evaluation_v54_root()
-        return sanitize_v54_report(
+        root = self._evaluation_root()
+        return sanitize_report(
             {
-                "project": "PaperStorm v5.4 Benchmark Console",
-                "status": self.get_evaluation_v54_status(),
+                "project": "Research v5.4 Benchmark Console",
+                "status": self.get_evaluation_status(),
                 "retrieval": _read_json(root / "retrieval_report.json", {}),
                 "context": _read_json(root / "context_report.json", {}),
             }
         )
 
-    def _evaluation_v54_root(self):
-        root = self.root_dir / "evaluations" / "v54"
+    def _evaluation_root(self):
+        root = self.root_dir / "evaluations"
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def _evaluation_v54_dataset(self, required: bool = True):
+    def _evaluation_dataset(self, required: bool = True):
         dataset = _read_json(
-            self._evaluation_v54_root() / "candidate_dataset.json", {}
+            self._evaluation_root() / "candidate_dataset.json", {}
         )
         if required and not dataset:
             raise ValueError("尚未导入 v5.4 候选数据集")
         return dataset
 
-    def _write_evaluation_v54_report(self, name: str, report: Dict):
-        path = self._evaluation_v54_root() / "{0}_report.json".format(name)
+    def _write_evaluation_report(self, name: str, report: Dict):
+        path = self._evaluation_root() / "{0}_report.json".format(name)
         path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-    def _production_runtime_v45(self):
-        from .paperstorm_production_v45 import PaperStormProductionRuntimeV45
+    def _production_runtime(self):
+        from .research_production import ResearchProductionRuntime
 
-        return PaperStormProductionRuntimeV45(
-            root_dir=self.root_dir / "production_runtime_v45",
+        return ResearchProductionRuntime(
+            root_dir=self.root_dir / "production_runtime",
             task_service=self,
-            control_plane=self._production_control_v45(),
+            control_plane=self._production_control(),
         )
 
-    def _production_control_v45(self):
-        from .paperstorm_production_v45 import ProductionControlPlaneV45
+    def _production_control(self):
+        from .research_production import ProductionControlPlane
 
-        return ProductionControlPlaneV45(
-            self.root_dir / "production_control_v45.sqlite"
+        return ProductionControlPlane(
+            self.root_dir / "production_control.sqlite"
         )
 
     def _memory_service_v43(self):
-        from .paperstorm_memory_v56 import LongTermMemoryService
+        from .research_longterm_memory import LongTermMemoryService
 
-        return LongTermMemoryService(self.root_dir / "memory_service_v56")
+        return LongTermMemoryService(self.root_dir / "memory_service")
 
     def _run_fake_research(self, state: Dict):
         output_dir = Path(state["output_dir"])
@@ -707,7 +717,7 @@ class PaperStormTaskService:
             "artifacts": [
                 "storm_gen_article_polished.txt",
                 "raw_search_results.json",
-                "paperstorm_trace.jsonl",
+                "research_trace.jsonl",
             ],
         }
         (output_dir / "storm_gen_outline.txt").write_text(
@@ -793,7 +803,7 @@ class PaperStormTaskService:
                 "success": True,
             },
         ]
-        (output_dir / "paperstorm_trace.jsonl").write_text(
+        (output_dir / "research_trace.jsonl").write_text(
             "\n".join(json.dumps(event, ensure_ascii=False) for event in trace_events)
             + "\n",
             encoding="utf-8",
@@ -823,7 +833,7 @@ class PaperStormTaskService:
         }
 
     def _run_research_loop(self, state: Dict):
-        """【改造】主线调研任务：自研多角色循环（替代原 STORM pipeline）。
+        """【改造】主线调研任务：自研多角色循环（替代原 ResearchAgent pipeline）。
 
         三个接线口子已闭合：
           口子3 检索器三源切换：按 state["retriever"] 选 pubmed / arxiv / local-pdf
@@ -832,16 +842,16 @@ class PaperStormTaskService:
           口子2 skill 注入：调研开始前扫描 skills/ 按主题匹配，注入视角生成/专家回答
         成稿写到 storm_gen_article_polished.txt（知识库问答 from_run_dir 依赖此文件名）。
         """
-        from .paperstorm_fulltext import (
+        from .research_fulltext import (
             ApprovalQueue,
             download_file,
             fetch_europepmc_fulltext,
             fetch_pmc_fulltext,
             is_whitelisted,
         )
-        from .paperstorm_research_loop import run_research_loop
-        from .paperstorm_router_llm import build_chat_llm_callable
-        from .paperstorm_skill import inject_skill, match_skills, scan_skills
+        from .research_loop import run_research_loop
+        from .research_router_llm import build_chat_llm_callable
+        from .research_skill import inject_skill, match_skills, scan_skills
 
         topic = state.get("topic") or ""
         output_dir = Path(state["output_dir"])
@@ -864,7 +874,7 @@ class PaperStormTaskService:
             rm = LocalPDFRM(k=3, pdf_dir=pdf_dir)
             retriever_used = "local-pdf"
         else:
-            from .paperstorm_pubmed import PubMedRM
+            from .research_pubmed import PubMedRM
 
             rm = PubMedRM(k=3)
             retriever_used = "pubmed"

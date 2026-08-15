@@ -5,7 +5,7 @@
   GET  /api/research/{task_id}          查任务状态 / 产物
   GET  /api/research/{task_id}/stream   SSE 事件流（task_status / evidence / approval_request / heartbeat）
   POST /api/research/{task_id}/approve  审批回传（批准 / 拒绝）
-  POST /api/chat                        问答（走生产运行时 → v45 主编排图）
+  POST /api/chat                        问答（走生产运行时 → 主编排图）
   POST /api/kb/query                    知识库查询
   POST /api/sessions                    建会话（完整多轮会话）
   GET  /api/sessions                    列会话
@@ -48,24 +48,24 @@ app = FastAPI(title="my-agent Paper Research Agent", version="1.0.0")
 ROOT_DIR = Path(__file__).resolve().parent / "storage"
 ROOT_DIR.mkdir(parents=True, exist_ok=True)
 
-from knowledge_storm.paperstorm_fulltext import ApprovalQueue  # noqa: E402
-from knowledge_storm.paperstorm_service import PaperStormTaskService  # noqa: E402
-from knowledge_storm.paperstorm_skill import match_skills, scan_skills  # noqa: E402
-from knowledge_storm.paperstorm_chat_agent import PaperStormChatAgent  # noqa: E402
+from research_agent.research_fulltext import ApprovalQueue  # noqa: E402
+from research_agent.research_service import ResearchTaskService  # noqa: E402
+from research_agent.research_skill import match_skills, scan_skills  # noqa: E402
+from research_agent.research_chat_agent import ResearchChatAgent  # noqa: E402
 
-service = PaperStormTaskService(root_dir=str(ROOT_DIR))
+service = ResearchTaskService(root_dir=str(ROOT_DIR))
 approval_queue = ApprovalQueue(str(ROOT_DIR / "approvals.sqlite"))
 
 # 会话层：完整会话管理（建会话 / 发消息 / 压缩 / 还原 / 重新生成）
 # 与 /api/chat 的无状态问答不同，这里维护持久化的多轮会话（chat_sessions/*.json）
-chat_agent = PaperStormChatAgent(task_service=service)
+chat_agent = ResearchChatAgent(task_service=service)
 
 
 # ---------- 请求模型 ----------
 
 class ResearchRequest(BaseModel):
     topic: str = Field(..., description="调研主题")
-    run_mode: str = "paperstorm"
+    run_mode: str = "research"
     retriever: str = "pubmed"
     max_perspectives: int = 1
     max_conv_turn: int = 1
@@ -76,7 +76,7 @@ class ChatRequest(BaseModel):
     thread_id: Optional[str] = None
     request_id: Optional[str] = None
     topic: Optional[str] = None
-    run_mode: str = "paperstorm"
+    run_mode: str = "research"
     allow_deep_research: bool = True
 
 
@@ -95,7 +95,7 @@ class KBQueryRequest(BaseModel):
 class SessionCreateRequest(BaseModel):
     title: str = ""
     topic: str = ""
-    run_mode: str = "paperstorm"
+    run_mode: str = "research"
     retriever: str = "pubmed"
     output_language: str = "zh"
     context_window_size: int = 6

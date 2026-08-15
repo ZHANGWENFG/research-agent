@@ -37,7 +37,7 @@ NETWORK_RETRY = RetryPolicy(
 )
 
 
-class ConversationStateV45(TypedDict, total=False):
+class ConversationState(TypedDict, total=False):
     thread_id: str
     message: str
     topic: str
@@ -56,7 +56,7 @@ class ConversationStateV45(TypedDict, total=False):
     conversation_history: list
 
 
-class PaperStormLangGraphV45:
+class ResearchLangGraph:
     """主编排运行时（改造版）。依赖全部注入，便于测试与替换。"""
 
     def __init__(
@@ -82,13 +82,13 @@ class PaperStormLangGraphV45:
 
     # ---------- 节点 ----------
 
-    def _classify(self, state: ConversationStateV45) -> dict:
+    def _classify(self, state: ConversationState) -> dict:
         router = self.intent_router
         message = state.get("message", "")
         if callable(router):
             decision = router(message=message, topic=state.get("topic", ""),
                               history=state.get("conversation_history", []))
-        else:  # PaperStormIntentRouter 对象 → .route(message, session, context_window)
+        else:  # ResearchIntentRouter 对象 → .route(message, session, context_window)
             decision = router.route(
                 message=message,
                 session={"topic": state.get("topic", "")},
@@ -96,7 +96,7 @@ class PaperStormLangGraphV45:
             )
         return {"router_decision": decision}
 
-    def _memory_recall(self, state: ConversationStateV45) -> dict:
+    def _memory_recall(self, state: ConversationState) -> dict:
         hits = []
         if self.memory_service is not None:
             try:
@@ -110,12 +110,12 @@ class PaperStormLangGraphV45:
                 logger.warning("memory recall failed: %s", exc)
         return {"memory_hits": hits or []}
 
-    def _casual_chat(self, state: ConversationStateV45) -> dict:
+    def _casual_chat(self, state: ConversationState) -> dict:
         reply = self.chat_llm(state.get("message", ""), max_tokens=400, temperature=0.7)
         text = reply[0] if isinstance(reply, list) else reply
         return {"answer": text, "grounded": False, "retrieval_stack": "casual_chat"}
 
-    def _memory_answer(self, state: ConversationStateV45) -> dict:
+    def _memory_answer(self, state: ConversationState) -> dict:
         hits = state.get("memory_hits", [])
         if not hits:
             return {"answer": "我暂时没在记忆中找到相关内容。", "grounded": False,
@@ -126,7 +126,7 @@ class PaperStormLangGraphV45:
         return {"answer": reply[0] if isinstance(reply, list) else reply,
                 "grounded": True, "retrieval_stack": "memory_answer"}
 
-    def _knowledge_retrieval(self, state: ConversationStateV45) -> dict:
+    def _knowledge_retrieval(self, state: ConversationState) -> dict:
         result = {"evidence": [], "citations": [], "answer": "", "grounded": False}
         if self.kb_service is not None:
             try:
@@ -136,7 +136,7 @@ class PaperStormLangGraphV45:
                         top_k=3,
                         task_id=state.get("topic", ""),
                     )
-                else:  # PaperStormKnowledgeBase 风格对象 → .query()
+                else:  # ResearchKnowledgeBase 风格对象 → .query()
                     result = self.kb_service.query(
                         state.get("message", ""),
                         top_k=3,
@@ -146,7 +146,7 @@ class PaperStormLangGraphV45:
                 logger.warning("knowledge retrieval failed: %s", exc)
         return {"knowledge_result": result}
 
-    def _evidence_grade(self, state: ConversationStateV45) -> dict:
+    def _evidence_grade(self, state: ConversationState) -> dict:
         evidence = (state.get("knowledge_result") or {}).get("evidence", [])
         if not evidence:
             return {"evidence_grade": {"sufficient": False, "reason": "no evidence"}}
@@ -160,7 +160,7 @@ class PaperStormLangGraphV45:
             sufficient = len(evidence) >= 2
             return {"evidence_grade": {"sufficient": sufficient, "reason": "rule fallback"}}
 
-    def _deep_research(self, state: ConversationStateV45) -> dict:
+    def _deep_research(self, state: ConversationState) -> dict:
         try:
             result = self.research_runner(state.get("message", ""))
             return {"deep_research_result": result}
@@ -168,7 +168,7 @@ class PaperStormLangGraphV45:
             logger.warning("deep research failed: %s", exc)
             return {"deep_research_result": {"error": str(exc), "article": ""}}
 
-    def _answer_with_citations(self, state: ConversationStateV45) -> dict:
+    def _answer_with_citations(self, state: ConversationState) -> dict:
         research = state.get("deep_research_result")
         kb = state.get("knowledge_result") or {}
         if research and research.get("article"):
@@ -189,7 +189,7 @@ class PaperStormLangGraphV45:
         return {"answer": "现有资料不足以回答该问题。", "citations": [], "grounded": False,
                 "retrieval_stack": "none"}
 
-    def _memory_candidate_write(self, state: ConversationStateV45) -> dict:
+    def _memory_candidate_write(self, state: ConversationState) -> dict:
         if self.memory_writer is not None:
             try:
                 self.memory_writer(
@@ -201,7 +201,7 @@ class PaperStormLangGraphV45:
                 logger.warning("memory write failed: %s", exc)
         return {}
 
-    def _final_trace(self, state: ConversationStateV45) -> dict:
+    def _final_trace(self, state: ConversationState) -> dict:
         trace = {
             "trace_id": state.get("trace_id") or uuid.uuid4().hex,
             "answer_len": len(state.get("answer", "")),
@@ -214,7 +214,7 @@ class PaperStormLangGraphV45:
 
     # ---------- 条件路由 ----------
 
-    def _route_after_classify(self, state: ConversationStateV45) -> str:
+    def _route_after_classify(self, state: ConversationState) -> str:
         intent = (state.get("router_decision") or {}).get("intent", "knowledge")
         if intent in ("casual", "chitchat"):
             return "casual_chat"
@@ -222,7 +222,7 @@ class PaperStormLangGraphV45:
             return "memory_answer"
         return "knowledge_retrieval"
 
-    def _route_after_evidence_grade(self, state: ConversationStateV45) -> str:
+    def _route_after_evidence_grade(self, state: ConversationState) -> str:
         grade = state.get("evidence_grade") or {}
         if grade.get("sufficient"):
             return "answer_with_citations"
@@ -233,7 +233,7 @@ class PaperStormLangGraphV45:
     # ---------- 图装配 ----------
 
     def _build_graph(self):
-        builder = StateGraph(ConversationStateV45)
+        builder = StateGraph(ConversationState)
         builder.add_node("classify", self._classify)
         builder.add_node("memory_recall", self._memory_recall)
         builder.add_node("casual_chat", self._casual_chat)

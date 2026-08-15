@@ -1,15 +1,15 @@
-"""paperstorm_retrieval_common —— 检索相关的「共享零件库」。
+"""research_retrieval_common —— 检索相关的「共享零件库」。
 
 这里集中放被多个模块共用、且不依赖具体业务逻辑的检索基础零件：
 - 文本切块 / 分词 / 相似度等工具函数
 - 本地哈希向量（HashEmbeddingProvider）等嵌入 Provider
-- 本地 RAG 索引（PaperStormRAGIndex）
+- 本地 RAG 索引（ResearchRAGIndex）
 - 上下文压缩检索器（ContextCompressionRetriever）
-- 跨会话长期记忆索引（PaperStormLongTermMemoryIndex）
+- 跨会话长期记忆索引（ResearchLongTermMemoryIndex）
 
 设计约束（防止循环引用）：
-- 本文件只允许 import 标准库 / 第三方库 / `paperstorm_memory`；
-- 严禁 `from .paperstorm_rag import ...` 或 `from .paperstorm_retrieval_v41 import ...`，
+- 本文件只允许 import 标准库 / 第三方库 / `research_memory`；
+- 严禁 `from .research_rag import ...` 或 `from .research_retrieval_index import ...`，
   否则会与旧检索机、新检索机互相引用，启动即报循环导入错误。
 """
 
@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
-from .paperstorm_memory import compress_context
+from .research_memory import compress_context
 
 
 class HashEmbeddingProvider:
@@ -78,16 +78,16 @@ class SentenceTransformerEmbeddingProvider:
 
 
 def build_embedding_provider(provider: Optional[str] = None, embedding_dim: int = 64):
-    provider = (provider or os.getenv("PAPERSTORM_EMBEDDING_PROVIDER") or "hash").lower()
+    provider = (provider or os.getenv("RESEARCH_EMBEDDING_PROVIDER") or "hash").lower()
     if provider in {"hash", "local", "baseline"}:
         return HashEmbeddingProvider(dim=embedding_dim)
     if provider in {"sentence-transformers", "sentence_transformers", "bge", "bge-m3"}:
-        model = os.getenv("PAPERSTORM_EMBEDDING_MODEL") or "BAAI/bge-m3"
+        model = os.getenv("RESEARCH_EMBEDDING_MODEL") or "BAAI/bge-m3"
         return SentenceTransformerEmbeddingProvider(model_name=model)
     raise ValueError("Unsupported embedding provider: {0}".format(provider))
 
 
-class PaperStormRAGIndex:
+class ResearchRAGIndex:
     """Local RAG index with lexical + hash-embedding hybrid retrieval."""
 
     def __init__(
@@ -128,7 +128,7 @@ class PaperStormRAGIndex:
             documents.append(
                 {
                     "document_id": "generated_article",
-                    "title": "Generated PaperStorm Article",
+                    "title": "Generated Research Article",
                     "text": article,
                     "source_type": "article",
                     "url": str(run_dir / "storm_gen_article_polished.txt"),
@@ -290,7 +290,7 @@ class ContextCompressionRetriever:
 
     def __init__(
         self,
-        index: PaperStormRAGIndex,
+        index: ResearchRAGIndex,
         max_context_chars: int = 2400,
         history_ratio: float = 0.3,
         evidence_ratio: float = 0.7,
@@ -383,7 +383,7 @@ class ContextCompressionRetriever:
         }
 
 
-class PaperStormLongTermMemoryIndex:
+class ResearchLongTermMemoryIndex:
     """Persistent local vector-like memory index for cross-session recall."""
 
     def __init__(self, records: Optional[List[Dict]] = None, embedding_dim: int = 64):

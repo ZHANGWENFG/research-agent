@@ -77,8 +77,8 @@ def evaluate_qasper_context_budget(
     quality score. Retrieval quality remains separately attributable to the
     upstream ranking run.
     """
-    from ...paperstorm_context_v56 import estimate_tokens
-    from ...paperstorm_context_v56 import ContextEngineConfigV56, ContextEngineV56
+    from ...research_context import estimate_tokens
+    from ...research_context import ContextEngineConfig, ContextEngine
 
     rankings = {
         str(row.get("case_id")): row
@@ -90,7 +90,7 @@ def evaluate_qasper_context_budget(
     for document in dataset.documents:
         paper_id = str(document.metadata.get("paper_id") or "")
         documents_by_paper.setdefault(paper_id, []).append(document)
-    config = ContextEngineConfigV56(
+    config = ContextEngineConfig(
         model_context_tokens=int(model_context_tokens),
         output_reserve_tokens=int(output_reserve_tokens),
         layer_caps={
@@ -102,7 +102,7 @@ def evaluate_qasper_context_budget(
             "artifact": 0.0,
         },
     )
-    engine = ContextEngineV56(config=config)
+    engine = ContextEngine(config=config)
     rows = []
     for case in dataset.cases:
         ranking = rankings.get(str(case.case_id))
@@ -163,7 +163,7 @@ def evaluate_qasper_context_budget(
             }
         )
     report = {
-        "benchmark": "qasper-context-budget-v56",
+        "benchmark": "qasper-context-budget",
         "dataset_version": dataset.version,
         "case_count": len(rows),
         "retrieval_mode": mode,

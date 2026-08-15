@@ -1,4 +1,4 @@
-"""Production-oriented local memory substrate for PaperStorm v5.6.
+"""Production-oriented local memory substrate for Research v5.6.
 
 The module deliberately keeps storage local and dependency-light.  It borrows
 the episode/fact/provenance model from temporal context graphs without forcing
@@ -91,16 +91,16 @@ def _canonical_key(content: str, memory_type: str):
         return "user:name"
     digest = hashlib.sha256(_normalize(content).encode("utf-8")).hexdigest()[:16]
     return "{0}:{1}".format(memory_type, digest)
-from .paperstorm_retrieval_common import HashEmbeddingProvider
+from .research_retrieval_common import HashEmbeddingProvider
 
 
-class LongTermMemoryServiceV56:
+class LongTermMemoryService:
     """SQLite-backed episodic and long-term memory with temporal retrieval."""
 
     def __init__(self, root_dir, embedding_provider=None):
         self.root_dir = Path(root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.root_dir / "memory_v56.sqlite3"
+        self.db_path = self.root_dir / "memory.sqlite3"
         self.embedding_provider = embedding_provider or HashEmbeddingProvider(64)
         self._initialize()
 
@@ -708,4 +708,4 @@ def _elapsed(started):
 
 # Explicit compatibility name for callers that want to switch implementations
 # without changing their service construction code.
-LongTermMemoryService = LongTermMemoryServiceV56
+LongTermMemoryService = LongTermMemoryService

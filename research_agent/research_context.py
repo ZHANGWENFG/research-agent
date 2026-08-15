@@ -1,4 +1,4 @@
-"""Layered, auditable context governance for PaperStorm v5.6."""
+"""Layered, auditable context governance for Research v5.6."""
 
 import json
 import re
@@ -27,7 +27,7 @@ LAYER_NAMES = ("pinned", "active", "summary", "memory", "evidence", "artifact")
 
 
 @dataclass
-class ContextEngineConfigV56:
+class ContextEngineConfigCore:
     model_context_tokens: int = 32768
     output_reserve_tokens: int = 4096
     soft_watermark: float = 0.72
@@ -49,7 +49,7 @@ class ContextEngineConfigV56:
         return max(1, int(self.model_context_tokens) - int(self.output_reserve_tokens))
 
 
-class ContextLedgerV56:
+class ContextLedger:
     """Append-only SQLite ledger for raw messages and compaction lineage."""
 
     def __init__(self, path):
@@ -170,9 +170,9 @@ class ContextLedgerV56:
         return [dict(self.get(row["compaction_id"]), event_type="compaction") for row in rows]
 
 
-class ContextEngineV56:
+class ContextEngineCore:
     def __init__(self, config=None, ledger=None, summarizer=None):
-        self.config = config or ContextEngineConfigV56()
+        self.config = config or ContextEngineConfigCore()
         self.ledger = ledger
         self.summarizer = summarizer
 
@@ -295,7 +295,7 @@ class ContextEngineV56:
 
     def restore(self, compaction_id):
         if not self.ledger:
-            raise RuntimeError("restore requires a ContextLedgerV56")
+            raise RuntimeError("restore requires a ContextLedger")
         return self.ledger.restore(compaction_id)
 
     def inspect(self, messages):
@@ -489,8 +489,8 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-class ContextEngineConfig(ContextEngineConfigV56):
-    """Accept the v4.2 option names while storing the v5.6 policy."""
+class ContextEngineConfig(ContextEngineConfigCore):
+    """兼容旧参数名，映射到当前策略。"""
 
     def __init__(
         self,
@@ -508,7 +508,7 @@ class ContextEngineConfig(ContextEngineConfigV56):
             soft_watermark=float(updates.pop("soft_watermark", compact_threshold_ratio)),
             high_watermark=float(updates.pop("high_watermark", high_watermark_ratio)),
             recent_messages=int(updates.pop("recent_messages", recent_message_count)),
-            layer_caps=updates.pop("layer_caps", ContextEngineConfigV56().layer_caps),
+            layer_caps=updates.pop("layer_caps", ContextEngineConfigCore().layer_caps),
         )
         self.tool_inline_token_limit = int(tool_inline_token_limit)
 
@@ -530,14 +530,14 @@ class ContextEngineConfig(ContextEngineConfigV56):
 
 
 class ContextEventStore:
-    """v4.2 store facade backed by the v5.6 SQLite ledger."""
+    """兼容旧存储接口，底层为 SQLite 台账。"""
 
     def __init__(self, path):
         path = Path(path)
         if path.suffix == ".jsonl":
-            path = path.with_suffix(".v56.sqlite3")
+            path = path.with_suffix(".sqlite3")
         self.path = path
-        self.ledger = ContextLedgerV56(path)
+        self.ledger = ContextLedger(path)
 
     def append_message(self, message):
         event_id = self.ledger.append_messages([message])[0]
@@ -565,13 +565,10 @@ class ContextEngine:
 
     def __init__(self, config=None, store=None, summarizer=None, token_counter=None):
         self.config = config or ContextEngineConfig()
-        if isinstance(self.config, ContextEngineConfigV56) and not isinstance(self.config, ContextEngineConfig):
-            core_config = self.config
-        else:
-            core_config = self.config
+        core_config = self.config
         self.store = store
-        ledger = getattr(store, "ledger", store if isinstance(store, ContextLedgerV56) else None)
-        self.core = ContextEngineV56(config=core_config, ledger=ledger, summarizer=summarizer)
+        ledger = getattr(store, "ledger", store if isinstance(store, ContextLedger) else None)
+        self.core = ContextEngineCore(config=core_config, ledger=ledger, summarizer=summarizer)
         self.token_counter = token_counter or estimate_tokens
 
     def estimate(self, messages):

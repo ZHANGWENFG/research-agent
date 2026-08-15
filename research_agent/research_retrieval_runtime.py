@@ -6,11 +6,11 @@ stack (BM25 + dense + RRF, optional Cross-Encoder) into that path and provides
 a repeatable benchmark that proves how much retrieval improved.
 
 Env knobs:
-    PAPERSTORM_RETRIEVAL_STACK     auto | v41 | legacy   (default auto)
-    PAPERSTORM_RETRIEVAL_EMBEDDING auto | real | hash    (default auto)
-    PAPERSTORM_RETRIEVAL_MODE      hybrid | bm25 | dense | hybrid_rerank (default hybrid)
-    PAPERSTORM_EMBEDDING_MODEL     sentence-transformers model name
-    PAPERSTORM_MODEL_CACHE         huggingface cache folder
+    RESEARCH_RETRIEVAL_STACK     auto | hybrid | legacy   (default auto)
+    RESEARCH_RETRIEVAL_EMBEDDING auto | real | hash    (default auto)
+    RESEARCH_RETRIEVAL_MODE      hybrid | bm25 | dense | hybrid_rerank (default hybrid)
+    RESEARCH_EMBEDDING_MODEL     sentence-transformers model name
+    RESEARCH_MODEL_CACHE         huggingface cache folder
 """
 
 import argparse
@@ -26,14 +26,14 @@ from typing import Dict, List, Optional
 
 
 def runtime_stack(override: Optional[str] = None) -> str:
-    value = (override or os.getenv("PAPERSTORM_RETRIEVAL_STACK") or "auto").strip().lower()
-    if value not in {"auto", "v41", "legacy"}:
+    value = (override or os.getenv("RESEARCH_RETRIEVAL_STACK") or "auto").strip().lower()
+    if value not in {"auto", "hybrid", "legacy"}:
         value = "auto"
     if value == "auto":
         try:
             import sentence_transformers  # noqa: F401
 
-            value = "v41"
+            value = "hybrid"
         except Exception:
             value = "legacy"
     return value
@@ -41,13 +41,13 @@ def runtime_stack(override: Optional[str] = None) -> str:
 
 def runtime_embedding(override: Optional[str] = None) -> str:
     value = (
-        override or os.getenv("PAPERSTORM_RETRIEVAL_EMBEDDING") or "auto"
+        override or os.getenv("RESEARCH_RETRIEVAL_EMBEDDING") or "auto"
     ).strip().lower()
     if value not in {"auto", "real", "hash"}:
         value = "auto"
     if value == "auto":
         # Quality-first: use a real sentence model when available; tests and
-        # offline demos force PAPERSTORM_RETRIEVAL_EMBEDDING=hash explicitly.
+        # offline demos force RESEARCH_RETRIEVAL_EMBEDDING=hash explicitly.
         try:
             import sentence_transformers  # noqa: F401
 
@@ -58,7 +58,7 @@ def runtime_embedding(override: Optional[str] = None) -> str:
 
 
 def runtime_mode(override: Optional[str] = None) -> str:
-    value = (override or os.getenv("PAPERSTORM_RETRIEVAL_MODE") or "hybrid").strip().lower()
+    value = (override or os.getenv("RESEARCH_RETRIEVAL_MODE") or "hybrid").strip().lower()
     if value not in {"hybrid", "bm25", "dense", "hybrid_rerank"}:
         value = "hybrid"
     return value
@@ -71,7 +71,7 @@ _INDEX_LRU_LOCK = threading.Lock()
 
 def _index_cache_maxsize() -> int:
     try:
-        return max(0, int(os.getenv("PAPERSTORM_RETRIEVAL_INDEX_CACHE_SIZE", "16")))
+        return max(0, int(os.getenv("RESEARCH_RETRIEVAL_INDEX_CACHE_SIZE", "16")))
     except ValueError:
         return 16
 
@@ -125,7 +125,7 @@ def meaningful_terms(text: str):
     """Substantive retrieval terms: Latin words + CJK words/bigrams, with
     common function/quality bigrams filtered out so one shared word like
     "效果" cannot make an off-topic knowledge base look relevant."""
-    from .paperstorm_retrieval_v41 import multilingual_tokenize
+    from .research_retrieval_index import multilingual_tokenize
 
     tokens = multilingual_tokenize(str(text or "").lower())
     terms = set()
@@ -156,16 +156,16 @@ def _run_dir_signature(run_dir):
 def _dense_provider(embedding: str):
     global _REAL_EMBEDDING_PROVIDER
     if embedding == "hash":
-        from .paperstorm_retrieval_common import HashEmbeddingProvider
+        from .research_retrieval_common import HashEmbeddingProvider
 
         return HashEmbeddingProvider(dim=64)
     if _REAL_EMBEDDING_PROVIDER is None:
-        from .paperstorm_retrieval_v41 import SentenceTransformerProvider
+        from .research_retrieval_index import SentenceTransformerProvider
 
         _REAL_EMBEDDING_PROVIDER = SentenceTransformerProvider(
-            model_name=os.getenv("PAPERSTORM_EMBEDDING_MODEL")
+            model_name=os.getenv("RESEARCH_EMBEDDING_MODEL")
             or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-            cache_folder=os.getenv("PAPERSTORM_MODEL_CACHE") or os.getenv("HF_HOME"),
+            cache_folder=os.getenv("RESEARCH_MODEL_CACHE") or os.getenv("HF_HOME"),
         )
     return _REAL_EMBEDDING_PROVIDER
 
@@ -194,8 +194,8 @@ def build_runtime_index(
         index, meta = cached
         return index, dict(meta, cached=True)
     provider = _dense_provider(embedding)
-    if stack == "v41":
-        from .paperstorm_retrieval_v41 import HybridPaperIndex
+    if stack == "hybrid":
+        from .research_retrieval_index import HybridPaperIndex
 
         index = HybridPaperIndex.from_run_dir(
             run_dir,
@@ -204,9 +204,9 @@ def build_runtime_index(
             chunk_overlap=chunk_overlap,
         )
     else:
-        from .paperstorm_retrieval_common import PaperStormRAGIndex
+        from .research_retrieval_common import ResearchRAGIndex
 
-        index = PaperStormRAGIndex.from_run_dir(
+        index = ResearchRAGIndex.from_run_dir(
             run_dir,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -237,13 +237,13 @@ def search_runtime_index(
         stack=stack,
         embedding=embedding,
     )
-    if meta["stack"] == "v41" and mode == "hybrid_rerank" and reranker is None:
-        from .paperstorm_retrieval_v41 import CrossEncoderReranker
+    if meta["stack"] == "hybrid" and mode == "hybrid_rerank" and reranker is None:
+        from .research_retrieval_index import CrossEncoderReranker
 
         reranker = CrossEncoderReranker(
-            cache_folder=os.getenv("PAPERSTORM_MODEL_CACHE") or os.getenv("HF_HOME")
+            cache_folder=os.getenv("RESEARCH_MODEL_CACHE") or os.getenv("HF_HOME")
         )
-    if meta["stack"] == "v41":
+    if meta["stack"] == "hybrid":
         results = index.search(query, mode=mode, top_k=top_k, reranker=reranker)
         results = _relevance_gate(results, query, meta["embedding"])
     else:
@@ -252,7 +252,7 @@ def search_runtime_index(
         "results": results,
         "stack": meta["stack"],
         "embedding": meta["embedding"],
-        "mode": mode if meta["stack"] == "v41" else "legacy_hybrid",
+        "mode": mode if meta["stack"] == "hybrid" else "legacy_hybrid",
         "cached": bool(meta.get("cached")),
     }
 
@@ -290,9 +290,9 @@ def run_retrieval_benchmark(
 ) -> Dict:
     """Compare the legacy runtime index against the V4.1 stack on the auditable
     100-case seed set and write a JSON + Markdown report with deltas."""
-    from .paperstorm_eval_v4 import build_seed_dataset
-    from .paperstorm_retrieval_common import HashEmbeddingProvider, PaperStormRAGIndex
-    from .paperstorm_retrieval_v41 import HybridPaperIndex
+    from .research_eval_v4 import build_seed_dataset
+    from .research_retrieval_common import HashEmbeddingProvider, ResearchRAGIndex
+    from .research_retrieval_index import HybridPaperIndex
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -300,13 +300,13 @@ def run_retrieval_benchmark(
     corpus = dataset.get("corpus") or []
     cases = [case for case in dataset.get("cases") or [] if case.get("expected_behavior") != "abstain"]
     provider = _dense_provider(embedding)
-    legacy_index = PaperStormRAGIndex.from_documents(
+    legacy_index = ResearchRAGIndex.from_documents(
         corpus,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         embedding_provider=provider,
     )
-    v41_index = HybridPaperIndex.from_documents(
+    hybrid_index = HybridPaperIndex.from_documents(
         corpus,
         embedding_provider=provider,
         chunk_size=chunk_size,
@@ -319,7 +319,7 @@ def run_retrieval_benchmark(
             query = str(case.get("query") or "")
             relevant = set(case.get("relevant_chunk_ids") or [])
             started = time.perf_counter()
-            if stack == "v41":
+            if stack == "hybrid":
                 ranked = index.search(query, mode="hybrid", top_k=top_k)
             else:
                 ranked = index.search(query, top_k=top_k)
@@ -338,28 +338,28 @@ def run_retrieval_benchmark(
         }
 
     legacy = run("legacy", legacy_index)
-    v41 = run("v41", v41_index)
+    hybrid = run("hybrid", hybrid_index)
     deltas = {
-        "recall_at_k": round(v41["recall_at_k"] - legacy["recall_at_k"], 6),
-        "mrr": round(v41["mrr"] - legacy["mrr"], 6),
-        "ndcg_at_k": round(v41["ndcg_at_k"] - legacy["ndcg_at_k"], 6),
-        "p95_latency_ms": round(v41["p95_latency_ms"] - legacy["p95_latency_ms"], 4),
+        "recall_at_k": round(hybrid["recall_at_k"] - legacy["recall_at_k"], 6),
+        "mrr": round(hybrid["mrr"] - legacy["mrr"], 6),
+        "ndcg_at_k": round(hybrid["ndcg_at_k"] - legacy["ndcg_at_k"], 6),
+        "p95_latency_ms": round(hybrid["p95_latency_ms"] - legacy["p95_latency_ms"], 4),
     }
     deltas["relative_recall_gain_pct"] = round(
-        (v41["recall_at_k"] - legacy["recall_at_k"])
+        (hybrid["recall_at_k"] - legacy["recall_at_k"])
         / max(1e-9, legacy["recall_at_k"])
         * 100.0,
         2,
     )
     report = {
-        "project": "PaperStorm Runtime Retrieval Benchmark",
+        "project": "Research Runtime Retrieval Benchmark",
         "dataset": dataset.get("dataset_version", ""),
         "top_k": top_k,
         "embedding": embedding,
         "stack_meta": {"legacy": "token_overlap + dense + keyword rerank",
-                       "v41": "BM25 + dense + RRF (hybrid)"},
+                       "hybrid": "BM25 + dense + RRF (hybrid)"},
         "legacy": legacy,
-        "v41": v41,
+        "hybrid": hybrid,
         "deltas": deltas,
     }
     (output_dir / "retrieval_runtime_benchmark.json").write_text(
@@ -401,7 +401,7 @@ def _percentile(values, quantile):
 
 def _to_markdown(report: Dict) -> str:
     lines = [
-        "# PaperStorm Runtime Retrieval Benchmark",
+        "# Research Runtime Retrieval Benchmark",
         "",
         "数据集：{0}（排除 abstain 用例后 {1} 条）".format(
             report.get("dataset", ""), report.get("legacy", {}).get("case_count", 0)
@@ -417,9 +417,9 @@ def _to_markdown(report: Dict) -> str:
         ("p95_latency_ms", "P95 延迟(ms)"),
     ]:
         legacy = report["legacy"][key]
-        v41 = report["v41"][key]
+        hybrid = report["hybrid"][key]
         delta = report["deltas"][key]
-        lines.append("| {0} | {1} | {2} | {3} |".format(label, legacy, v41, delta))
+        lines.append("| {0} | {1} | {2} | {3} |".format(label, legacy, hybrid, delta))
     lines.append("")
     lines.append("relative recall gain: {0}%".format(
         report.get("deltas", {}).get("relative_recall_gain_pct", 0.0)
@@ -433,7 +433,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compare legacy vs V4.1 runtime retrieval on the auditable seed set."
     )
-    parser.add_argument("--output-dir", default="./results/paperstorm_retrieval_runtime")
+    parser.add_argument("--output-dir", default="./results/research_retrieval_runtime")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--embedding", choices=["auto", "real", "hash"], default="auto")
     args = parser.parse_args()

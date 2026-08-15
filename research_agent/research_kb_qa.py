@@ -3,10 +3,10 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .paperstorm_memory import PaperStormMemoryStore
+from .research_memory import ResearchMemoryStore
 
 
-class PaperStormKnowledgeBase:
+class ResearchKnowledgeBase:
     def __init__(self, documents: List[Dict], run_dir: Optional[Path] = None):
         self.documents = documents
         self.run_dir = Path(run_dir) if run_dir else None
@@ -70,7 +70,7 @@ class PaperStormKnowledgeBase:
     def answer_question(
         self,
         question: str,
-        memory_store: Optional[PaperStormMemoryStore] = None,
+        memory_store: Optional[ResearchMemoryStore] = None,
         top_k: int = 3,
         answer_generator: Optional[Callable[[str], str]] = None,
     ):
@@ -107,7 +107,7 @@ class PaperStormKnowledgeBase:
     def search(self, query: str, top_k: int = 3):
         if self.run_dir:
             try:
-                from .paperstorm_retrieval_runtime import search_runtime_index
+                from .research_retrieval_runtime import search_runtime_index
 
                 outcome = search_runtime_index(self.run_dir, query, top_k=top_k)
                 self.retrieval_meta = {

@@ -41,7 +41,7 @@ DEFINITIONS = (
         "RAG Retrieval",
         "public_official",
         "在 SciFact 官方 test 上比较 BM25、Hybrid 与 Cross-Encoder 重排。",
-        "run_paperstorm_public_benchmark.py",
+        "run_research_public_benchmark.py",
         ("scifact_dir",),
         ("Recall@10", "MRR@10", "nDCG@10", "P95 latency"),
         "Smoke 约 1 分钟；完整真实向量约 20-40 分钟",
@@ -53,7 +53,7 @@ DEFINITIONS = (
         "RAG Retrieval",
         "public_official",
         "在 QASPER 官方 test 的论文内检索人工证据段落。",
-        "run_paperstorm_public_benchmark.py",
+        "run_research_public_benchmark.py",
         ("qasper_json",),
         ("Recall@5", "MRR@5", "nDCG@5", "P95 latency"),
         "Smoke 约 1 分钟；完整真实向量约 1-2 小时",
@@ -72,7 +72,7 @@ DEFINITIONS = (
         requires_llm=True,
     ),
     BenchmarkDefinition(
-        "longmemeval-retrieval-v56",
+        "longmemeval-retrieval",
         "LongMemEval-S 长期记忆检索",
         "v5.6",
         "Memory",
@@ -84,7 +84,7 @@ DEFINITIONS = (
         "Smoke 约 1 分钟；完整真实向量约 15-30 分钟",
     ),
     BenchmarkDefinition(
-        "qasper-context-v56",
+        "qasper-context",
         "QASPER Context 预算治理",
         "v5.6",
         "Context",
@@ -96,7 +96,7 @@ DEFINITIONS = (
         "约 1-3 分钟，不调用 LLM",
     ),
     BenchmarkDefinition(
-        "longbench-context-v56",
+        "longbench-context",
         "LongBench Context 配对评测",
         "v5.6",
         "Context",
@@ -212,13 +212,13 @@ class BenchmarkRegistry:
             ]
             if profile == "smoke":
                 command += ["--smoke-limit", "10"]
-        elif benchmark_id == "longmemeval-retrieval-v56":
+        elif benchmark_id == "longmemeval-retrieval":
             command += [
                 "--dataset", str(self.inputs["longmemeval_json"]), "--output-dir", str(output_dir),
                 "--model-cache", str(self.root / "models"), "--top-k", "5",
             ]
             command += ["--embedding", "hash", "--limit", "10"] if profile == "smoke" else ["--embedding", "sentence-transformer"]
-        elif benchmark_id == "qasper-context-v56":
+        elif benchmark_id == "qasper-context":
             command += [
                 "--dataset", str(self.inputs["qasper_json"]), "--rankings", str(self.inputs["qasper_rankings"]),
                 "--output-dir", str(output_dir), "--mode", "hybrid_rerank",
@@ -349,11 +349,11 @@ def _resolve_benchmark_root(explicit=None):
     candidates = []
     if explicit:
         candidates.append(Path(explicit))
-    if os.getenv("PAPERSTORM_BENCHMARK_ROOT"):
-        candidates.append(Path(os.environ["PAPERSTORM_BENCHMARK_ROOT"]))
+    if os.getenv("RESEARCH_BENCHMARK_ROOT"):
+        candidates.append(Path(os.environ["RESEARCH_BENCHMARK_ROOT"]))
     candidates.extend(
         [
-            Path.home() / "Desktop" / "codex" / "paperstorm-benchmarks",
+            Path.home() / "Desktop" / "codex" / "research-benchmarks",
             PROJECT_ROOT / "data" / "benchmarks",
         ]
     )
@@ -367,15 +367,15 @@ def _discover_inputs(root):
     root = Path(root)
     qasper_json = root / "qasper-official-v0.3" / "qasper-test-v0.3.json"
     project_rankings = PROJECT_ROOT / "results" / "public_benchmarks" / "v55_qasper_test_real" / "predictions.jsonl"
-    context_rankings = root / "v56" / "runs" / "qasper-context-v56" / "predictions.jsonl"
+    context_rankings = root / "runs" / "runs" / "qasper-context" / "predictions.jsonl"
     values = {
         "scifact_dir": root / "datasets" / "scifact",
         "qasper_json": qasper_json,
         "qasper_cache": root,
         "qasper_rankings": project_rankings if project_rankings.exists() else context_rankings,
-        "longmemeval_json": root / "v56" / "longmemeval_s_cleaned.json",
-        "longbench_json": root / "v56" / "longbench_v2_data.json",
-        "longbench_predictions": root / "v56" / "runs" / "longbench-context-v56" / "predictions.json",
+        "longmemeval_json": root / "runs" / "longmemeval_s_cleaned.json",
+        "longbench_json": root / "runs" / "longbench_v2_data.json",
+        "longbench_predictions": root / "runs" / "runs" / "longbench-context" / "predictions.json",
     }
     return {key: path.resolve() for key, path in values.items() if _input_exists(key, path)}
 
@@ -391,8 +391,8 @@ def _latest_result_path(benchmark_id, root):
         "scifact-retrieval-v55": [PROJECT_ROOT / "results/public_benchmarks/v55_scifact_real/metrics.json"],
         "qasper-retrieval-v55": [PROJECT_ROOT / "results/public_benchmarks/v55_qasper_test_real/metrics.json"],
         "qasper-answer-v55": [PROJECT_ROOT / "results/public_benchmarks/v55_qasper_answer_test_real/metrics.json"],
-        "longmemeval-retrieval-v56": [root / "v56/runs/longmemeval-s-minilm/metrics.json"],
-        "qasper-context-v56": [root / "v56/runs/qasper-context-v56/metrics.json"],
+        "longmemeval-retrieval": [root / "runs/longmemeval-s-minilm/metrics.json"],
+        "qasper-context": [root / "runs/qasper-context/metrics.json"],
     }.get(benchmark_id, [])
     return next((path.resolve() for path in candidates if path.exists()), None)
 

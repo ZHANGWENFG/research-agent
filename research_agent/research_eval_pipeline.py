@@ -20,8 +20,8 @@ QUERY_VALIDITY = {"valid", "invalid", "needs_edit"}
 EVIDENCE_SUFFICIENCY = {"sufficient", "partial", "insufficient"}
 
 
-def normalize_v54_corpus(dataset: Dict) -> List[Dict]:
-    """把 v5.2 corpus 记录还原为 HybridPaperIndex 的 Chunk 契约。"""
+def normalize_corpus(dataset: Dict) -> List[Dict]:
+    """把旧版 corpus 记录还原为 HybridPaperIndex 的 Chunk 契约。"""
 
     output = []
     for index, document in enumerate((dataset or {}).get("corpus") or [], start=1):
@@ -334,7 +334,7 @@ def run_retrieval_benchmark(
         ]
         paired_test_delta = paired_score_delta(baseline_scores, selected_scores)
     return {
-        "project": "PaperStorm v5.4 真实论文检索评测",
+        "project": "Research v5.4 真实论文检索评测",
         "protocol": "document_holdout_dev_selection_frozen_test",
         "selection_split": "dev",
         "final_reporting_split": "test" if release_ready else None,
@@ -358,7 +358,7 @@ def evaluate_context_scenarios(
 ) -> Dict:
     """在同一真实论文场景上比较三种上下文策略。"""
 
-    from .paperstorm_context_v56 import (
+    from .research_context import (
         ContextEngine,
         ContextEngineConfig,
         ContextEventStore,
@@ -442,7 +442,7 @@ def evaluate_context_scenarios(
 
     answer_probes = [case.get("answer_probe") for case in cases if case.get("answer_probe")]
     return {
-        "project": "PaperStorm v5.4 真实论文上下文工程评测",
+        "project": "Research v5.4 真实论文上下文工程评测",
         "evidence_type": "deterministic_real_paper_probe",
         "scenario_count": len(cases),
         "strategies": {
@@ -479,13 +479,13 @@ def _context_scenario(case):
             "id": "tool-call",
             "role": "assistant",
             "content": "call zotero_search",
-            "tool_call_id": "zotero-v54",
+            "tool_call_id": "zotero",
         },
         {
             "id": "tool-output",
             "role": "tool",
             "name": "zotero_search",
-            "tool_call_id": "zotero-v54",
+            "tool_call_id": "zotero",
             "content": "document_id={0}\ntitle={1}\nevidence={2}".format(
                 source_document_id, source_title, excerpt
             ),
@@ -513,7 +513,7 @@ def _context_strategy_metrics(
     repeated_retention,
     summary_text="",
 ):
-    from .paperstorm_context_v56 import estimate_tokens
+    from .research_context import estimate_tokens
 
     rendered = "\n".join(
         [summary_text] + [str(item.get("content") or "") for item in messages]
@@ -592,7 +592,7 @@ def _retrieval_limitations(trust_level, test_case_count):
     return limitations
 
 
-def sanitize_v54_report(report: Dict) -> Dict:
+def sanitize_report(report: Dict) -> Dict:
     """移除不应进入网页汇总或版本库的私有字段。"""
 
     blocked = {
@@ -767,7 +767,7 @@ class AnnotationStore:
             cases.append(item)
         return {
             "metadata": {
-                "schema_version": "paperstorm-reviewed-v5.4",
+                "schema_version": "research-reviewed-v1.0",
                 "source_dataset_sha256": self.dataset_sha256,
                 "annotation_status": "human_reviewed",
                 "exported_at": _utc_now(),

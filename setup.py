@@ -15,13 +15,14 @@ with open("requirements.txt", encoding="utf-8") as f:
 
 
 setup(
-    name="paperstorm-agent",
-    version="5.6.0",
-    author="PaperStorm contributors; Stanford OVAL contributors",
-    description="PaperStorm Agent: a production-oriented research and RAG agent built on Stanford STORM.",
+    name="research-agent",
+    version="1.0.0",
+    author="my-agent developers",
+    description="my-agent: a paper research agent with LangGraph orchestration, "
+    "a self-built multi-agent research loop, and production governance.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yzy-151/paperstorm-agent",
+    url="https://github.com/yzy-151/research-agent",
     license="MIT License",
     packages=find_packages(),
     classifiers=[

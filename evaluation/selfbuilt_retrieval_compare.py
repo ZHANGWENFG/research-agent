@@ -171,11 +171,11 @@ def main():
     _install_stubs()
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-    from knowledge_storm.paperstorm_retrieval_common import (
+    from research_agent.research_retrieval_common import (
         HashEmbeddingProvider,
-        PaperStormRAGIndex,
+        ResearchRAGIndex,
     )
-    from knowledge_storm.paperstorm_retrieval_v41 import HybridPaperIndex
+    from research_agent.research_retrieval_index import HybridPaperIndex
 
     chunks, cases = build_dataset()
     print(f"语料: {len(chunks)} 节 | 用例: {len(cases)} 个口语化中文查询")
@@ -183,11 +183,11 @@ def main():
     provider = HashEmbeddingProvider(dim=64)
     embeds = provider.embed([c["content"] for c in chunks])
     legacy_chunks = [dict(c, embedding=embeds[i]) for i, c in enumerate(chunks)]
-    legacy_index = PaperStormRAGIndex(chunks=legacy_chunks, embedding_provider=provider)
-    v41_index = HybridPaperIndex(chunks, embedding_provider=provider)
+    legacy_index = ResearchRAGIndex(chunks=legacy_chunks, embedding_provider=provider)
+    new_index = HybridPaperIndex(chunks, embedding_provider=provider)
 
     legacy = run(legacy_index, cases)
-    v41 = run(v41_index, cases)
+    new = run(new_index, cases)
 
     print("\n=== 对比结果 ===")
     print(
@@ -195,15 +195,15 @@ def main():
         f"nDCG@5={legacy['nDCG@5']} 延迟={legacy['avg_ms']}ms"
     )
     print(
-        f"新检索栈(V4.1)  : Recall@5={v41['Recall@5']} MRR={v41['MRR']} "
-        f"nDCG@5={v41['nDCG@5']} 延迟={v41['avg_ms']}ms"
+        f"新检索栈(Hybrid)  : Recall@5={new['Recall@5']} MRR={new['MRR']} "
+        f"nDCG@5={new['nDCG@5']} 延迟={new['avg_ms']}ms"
     )
     print("\n=== 提升 ===")
     for k in ["Recall@5", "MRR", "nDCG@5"]:
-        old, new = legacy[k], v41[k]
+        old, new = legacy[k], new[k]
         if old > 0:
             print(f"{k}: {old} -> {new}  (相对提升 {(new - old) / old * 100:+.2f}%)")
-    print(f"延迟变化: Δ{v41['avg_ms'] - legacy['avg_ms']:+.2f}ms")
+    print(f"延迟变化: Δ{new['avg_ms'] - legacy['avg_ms']:+.2f}ms")
 
 
 if __name__ == "__main__":

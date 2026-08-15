@@ -147,7 +147,7 @@ def evaluate_run(run_dir, case: EvalCase):
     article = _read_text(run_dir / "storm_gen_article_polished.txt")
     if not article:
         article = _read_text(run_dir / "storm_gen_article.txt")
-    trace_events = _load_trace_events(run_dir / "paperstorm_trace.jsonl")
+    trace_events = _load_trace_events(run_dir / "research_trace.jsonl")
 
     retrieval_text = "\n".join(_iter_result_texts(raw_results))
     article_and_retrieval = article + "\n" + retrieval_text
@@ -270,12 +270,6 @@ def evaluate_qa_artifact(run_dir, case: EvalCase):
     }
 
 
-def evaluate_multi_agent_report(run_dir):
-    from .paperstorm_agents import evaluate_multi_agent_report as _evaluate
-
-    return _evaluate(run_dir)
-
-
 def _build_notes(checks, forbidden_hits, expected_hits, case, source_count) -> List[str]:
     notes = []
     if not checks["has_article"]:
@@ -310,7 +304,7 @@ def write_scorecards(run_dir, scorecard) -> Tuple[Path, Path]:
 
 def _render_scorecard_markdown(scorecard) -> str:
     lines = [
-        "# PaperStorm Eval Scorecard",
+        "# Research Eval Scorecard",
         "",
         "## Summary",
         "",

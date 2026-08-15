@@ -1,4 +1,4 @@
-"""自研多角色调研循环（改造核心：替代 STORM 的调研引擎）。
+"""自研多角色调研循环（改造核心：替代 ResearchAgent 的调研引擎）。
 
 四个 Agent = 问、答、写、审（LangGraph 子图，7 节点）：
   1. generate_perspectives  生成视角 + 并行计划（模型自主调度，6 条硬边界约束）

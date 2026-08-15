@@ -57,7 +57,7 @@ class PubMedRM:
     def _get(self, url: str, params: Dict) -> dict:
         self._throttle()
         self.usage += 1
-        params.setdefault("tool", "paperstorm-agent")
+        params.setdefault("tool", "research-agent")
         params.setdefault("email", self.email)
         if self.api_key:
             params.setdefault("api_key", self.api_key)
@@ -95,7 +95,7 @@ class PubMedRM:
             "id": ",".join(pmids),
             "rettype": "abstract",
             "retmode": "text",
-            "tool": "paperstorm-agent",
+            "tool": "research-agent",
             "email": self.email,
         }
         if self.api_key:

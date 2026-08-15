@@ -741,7 +741,7 @@ User input: {user_input}"""
         3: "Sorry, the current engine cannot process topics related to personal experience. Please try another topic. "
         "(Our input filtering uses OpenAI GPT-4o-mini, which may result in false positives. "
         "We apologize for any inconvenience.)",
-        4: "Sorry, STORM cannot follow arbitrary instruction. Please input a topic you want to learn about. "
+        4: "Sorry, ResearchAgent cannot follow arbitrary instruction. Please input a topic you want to learn about. "
         "(Our input filtering uses OpenAI GPT-4o-mini, which may result in false positives. "
         "We apologize for any inconvenience.)",
     }

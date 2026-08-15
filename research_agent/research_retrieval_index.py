@@ -82,7 +82,7 @@ class SentenceTransformerProvider:
         self.name = "sentence-transformers:{0}".format(model_name)
         self.model = SentenceTransformer(
             model_name,
-            cache_folder=cache_folder or os.getenv("PAPERSTORM_MODEL_CACHE"),
+            cache_folder=cache_folder or os.getenv("RESEARCH_MODEL_CACHE"),
             device=device,
         )
         dimension_getter = getattr(
@@ -116,7 +116,7 @@ class CrossEncoderReranker:
     ):
         self.model_name = model_name
         self.score_fn = score_fn
-        self.cache_folder = cache_folder or os.getenv("PAPERSTORM_MODEL_CACHE")
+        self.cache_folder = cache_folder or os.getenv("RESEARCH_MODEL_CACHE")
         self.device = device
         self._model = None
 
@@ -159,7 +159,7 @@ class CrossEncoderReranker:
 class HybridPaperIndex:
     """Persistent BM25 + dense index with RRF and optional Cross-Encoder."""
 
-    schema_version = "paperstorm-hybrid-index-v4.1"
+    schema_version = "research-hybrid-index-v4.1"
 
     def __init__(
         self, chunks: Iterable[Dict], embedding_provider, embeddings=None, manifest=None
@@ -257,7 +257,7 @@ class HybridPaperIndex:
         chunk_size: int = 500,
         chunk_overlap: int = 100,
     ):
-        from .paperstorm_retrieval_common import chunk_text
+        from .research_retrieval_common import chunk_text
 
         if chunk_overlap >= chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
@@ -307,7 +307,7 @@ class HybridPaperIndex:
             documents.append(
                 {
                     "document_id": "generated_article",
-                    "title": "Generated PaperStorm Article",
+                    "title": "Generated Research Article",
                     "text": article,
                     "source_type": "article",
                     "url": str(run_dir / "storm_gen_article_polished.txt"),
