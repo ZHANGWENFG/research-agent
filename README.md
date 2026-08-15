@@ -74,8 +74,11 @@
 - 主线 8 步：入口 → 两道闸（幂等/熔断，单用户模式）→ 意图路由（规则+LLM，0.65 置信）→ 记忆召回（五信号）→ 三路分支 → 证据裁判（规则+三词判定）→ 深度调研（自研问/答/写/审循环）→ 带引用回答
 - 自研多角色循环：4 Agent（问/答/写/审）+ 模型自主并行调度 + 6 条硬边界
 - 全文获取四级：文本接口 → 白名单下载（三重校验）→ 非白名单人工审批 → 兜底链接
-- 评测验收：跑公开 Benchmark 不退化（SciFact Recall@10=0.8379 / QASPER F1=0.5441 / LongMemEval-S Recall@5=0.8003，真实向量下记录）
-- 评测复现：`python run_scifact_benchmark.py`（hash 嵌入离线 smoke，产物写入 `storage/benchmark_runs/scifact/`；加 `--real` 用真实向量）
+- 评测验收：公开 Benchmark 实测（SciFact test 300 例，产物落 `storage/benchmark_runs/`）
+  - **hybrid Recall@10=0.8114 / MRR@10=0.6298**（真实向量 all-MiniLM-L6-v2，2026-08-15 本机复现）
+  - dense Recall@10=0.7857（真实向量）｜ bm25 Recall@10=0.7592
+  - QASPER / LongMemEval 为早期基线记录（代码重构后待复跑）
+- 评测复现：`python run_scifact_benchmark.py --real --model sentence-transformers/all-MiniLM-L6-v2 --output storage/benchmark_runs/scifact-real`（BEIR 官方数据集，产物含 git commit / 语料 sha256 / 时间戳，完全可复现）
 
 ## License
 

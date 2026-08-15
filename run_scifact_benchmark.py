@@ -25,6 +25,7 @@ from evaluation.public_benchmarks.report import write_benchmark_artifacts
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--real", action="store_true", help="用真实向量（sentence-transformers）")
+    parser.add_argument("--model", default="BAAI/bge-m3", help="真实向量模型名（小模型更快）")
     parser.add_argument("--output", default=str(ROOT / "storage" / "benchmark_runs" / "scifact"))
     parser.add_argument("--cache", default=str(ROOT / "storage" / "datasets"))
     args = parser.parse_args()
@@ -40,9 +41,9 @@ def main():
 
     if args.real:
         from research_agent.research_retrieval_common import (
-            sentence_transformers_embedding_provider,
+            SentenceTransformerEmbeddingProvider,
         )
-        provider = sentence_transformers_embedding_provider()
+        provider = SentenceTransformerEmbeddingProvider(model_name=args.model)
     else:
         provider = HashEmbeddingProvider(dim=128)
     print(f"③ 嵌入后端: {provider.name}")
