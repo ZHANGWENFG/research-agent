@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ...research_longterm_memory import LongTermMemoryService
+from research_agent.research_longterm_memory import LongTermMemoryService
 
 
 def run_memory_retrieval(dataset, output_dir, top_k=5, embedding_provider=None, limit=None):

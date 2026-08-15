@@ -77,8 +77,8 @@ def evaluate_qasper_context_budget(
     quality score. Retrieval quality remains separately attributable to the
     upstream ranking run.
     """
-    from ...research_context import estimate_tokens
-    from ...research_context import ContextEngineConfig, ContextEngine
+    from research_agent.research_context import estimate_tokens
+    from research_agent.research_context import ContextEngineConfig, ContextEngine
 
     rankings = {
         str(row.get("case_id")): row

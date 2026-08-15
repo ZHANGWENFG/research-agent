@@ -8,7 +8,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from ...research_retrieval_index import HybridPaperIndex
+from research_agent.research_retrieval_index import HybridPaperIndex
 from .metrics import retrieval_metrics
 from .report import write_benchmark_artifacts
 

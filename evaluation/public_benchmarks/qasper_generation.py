@@ -82,7 +82,7 @@ def complete_qasper_rankings(
     on_ranking=None,
 ):
     """Fill missing rankings with paper-scoped retrieval."""
-    from ...research_retrieval_index import HybridPaperIndex
+    from research_agent.research_retrieval_index import HybridPaperIndex
 
     rankings = {
         str(case_id): [str(value) for value in values]

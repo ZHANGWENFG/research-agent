@@ -31,7 +31,7 @@
 2. **识别你是谁、哪场对话**——请求带上线程号（thread_id，同一场对话共用一个，不填自动生成）和请求号（request_id，这一次请求的唯一编号）
 3. **决定怎么处理**——是走对话问答（一次问答），还是走调研任务（产出一篇报告）
 
-**谁在干活**：`api.py`——项目唯一对外入口，共 11 个接口。
+**谁在干活**：`api.py`——项目唯一对外入口，共 24 个路由（调研 / 会话 / 审批 / 治理面板）。
 
 **参数设计（大白话）**：
 - `thread_id` 为什么要有：检查点按线程号存档、幂等按线程号分账——**没有它，断点续跑和防重发不知道归到哪场对话**。
@@ -292,10 +292,10 @@
 
 ```
 my-agent/
-├─ api.py                              # 接口层：11 个接口 + SSE
-├─ start_research_service.py         # 启动脚本（含预检；实际启动走 uvicorn api:app）
+├─ api.py                              # 接口层：24 个路由 + SSE
+├─ run_scifact_benchmark.py          # SciFact 公开基准评测入口（产物落 storage/benchmark_runs/）
 ├─ requirements.txt / setup.py / README.md   # 依赖 / 打包 / 说明
-├─ research_agent/                    # 核心包（28 个文件）
+├─ research_agent/                    # 核心包（26 个模块）
 │  ├─ research_service.py            # 服务层：任务生命周期 + 双入口调度 + 治理查询
 │  ├─ research_production.py     # 治理层：幂等/熔断/审计/追踪/权限 + 生产运行时
 │  ├─ research_graph_adapter.py  # 适配层：检查点 + 三源 + 全文 + skill 装配
@@ -332,7 +332,7 @@ my-agent/
 5. **`lm.py`（大模型抽象）**——统一接口（`LitellmModel`：litellm 统一网关，支持 100+ provider）+ 两层缓存（内存最近 3000 条 + 磁盘跨进程缓存）+ 用量记账。纯自研实现，无 dspy 依赖。
 6. **`utils.py`**——加载 Key 等小工具。
 7. **评测体系**——自研运行器（seed 回归 / 消融对比 / 三场景评测）+ 公开数据集评测（SciFact / QASPER / LongMemEval / LongBench；指标：召回率 / MRR / nDCG@K / 置信区间）。**定位：验收标准——架构迭代后跑原评测不退化。**
-8. **`start_research_service.py`**——带端口预检的启动脚本；当前实际启动走 `uvicorn api:app`。
+8. **`run_scifact_benchmark.py`**——SciFact 公开基准评测入口；服务实际启动走 `uvicorn api:app`。
 9. **`requirements.txt` / `setup.py` / `README.md`**——依赖、打包、说明。
 
 ---
@@ -350,7 +350,7 @@ my-agent/
 
 **记忆召回（五信号）**：字面 / 向量 / 实体 → 融合成主分 → 时效 + 近期度（30 天衰减一半）+ 重要度加权 → 去重 → 前 5 条。
 
-## 4.2 接口清单（FastAPI + SSE，共 11 个）
+## 4.2 接口清单（FastAPI + SSE，共 24 个路由）
 
 - POST /api/chat —— 问答（message / thread_id / request_id / topic / run_mode / allow_deep_research）
 - POST /api/kb/query —— 知识库查询（task_id / question / top_k 默认 3）

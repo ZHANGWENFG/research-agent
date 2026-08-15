@@ -682,7 +682,7 @@ def _casual_chat_answer(
         answer = (
             "网页端有两种模式：调研写文章用于 submit/run/poll 生成文章和 trace；聊天问答用于直接提问。"
             "fake 模式不需要 API key，适合本地演示；research 模式会调用真实检索和 LLM。"
-            "如果你更新过代码，请重启 start_research_service.py，否则浏览器可能还连着旧服务。"
+            "如果你更新过代码，请重启服务（uvicorn api:app），否则浏览器可能还连着旧服务。"
         )
     else:
         answer = (
