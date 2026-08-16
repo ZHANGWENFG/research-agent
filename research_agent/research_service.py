@@ -936,6 +936,52 @@ class ResearchTaskService:
             "scorecard": result.get("scorecard", {}),
             "qc_passed": result.get("qc_passed", False),
         }
+        # 缺口④挂接（2026-08-16）: MEMORY_CONSOLIDATE=1 时任务成功后沉淀记忆
+        self._consolidate_memories_after_run(state, result, chat_llm)
+
+    def _consolidate_memories_after_run(self, state: Dict, result: Dict, chat_llm):
+        """记忆自动沉淀（缺口④，2026-08-16 新增）。
+
+        MEMORY_CONSOLIDATE=1 时：把本次任务的关键事件写入 ResearchMemoryStore
+        （root_dir/memory.json，存在则加载），再按术语聚类把同主题记录沉淀为
+        semantic 记忆（MEMGPT 式提炼）。异常静默记录 warning——沉淀失败
+        绝不阻断主线调研。
+        """
+        import os
+
+        if os.getenv("MEMORY_CONSOLIDATE") != "1":
+            return
+        try:
+            from .research_memory import ResearchMemoryStore
+            from .research_memory_consolidation import consolidate_memories
+
+            memory_path = Path(self.root_dir) / "memory.json"
+            store = (
+                ResearchMemoryStore.load(memory_path)
+                if memory_path.exists()
+                else ResearchMemoryStore()
+            )
+            task_id = state.get("task_id")
+            topic = state.get("topic") or ""
+            store.remember_episode(
+                "调研主题：{0}".format(topic),
+                metadata={"task_id": task_id, "run_type": "research_loop"},
+            )
+            store.remember_episode(
+                "QC 结果：{0}；评分卡 {1}".format(
+                    "通过" if result.get("qc_passed") else "未通过",
+                    json.dumps((result.get("scorecard") or {}), ensure_ascii=False)[:200],
+                ),
+                metadata={"task_id": task_id},
+            )
+            consolidated = consolidate_memories(store, llm_call=chat_llm, min_episodes=3)
+            # 无条件落盘：即使本次未达沉淀阈值，episodic 原料也要跨任务积累
+            store.save(memory_path)
+            logger.info(
+                "memory consolidation: %d new semantic memory(s)", len(consolidated)
+            )
+        except Exception as exc:  # noqa: BLE001 —— 沉淀失败不影响主线
+            logger.warning("memory consolidation skipped: %s", exc)
 
     # ---------- 缺口 4: 真·多代理并行（RESEARCH_PARALLEL=1 启用） ----------
 

@@ -196,3 +196,39 @@ def test_qc_reject_loop_terminates_in_graph():
     # 图正常结束，QC 最终未通过
     assert final.get("qc_result", {}).get("passed") is False
     assert final.get("revise_count", 0) >= 1
+
+
+# ---------- 缺口①挂接: attribution_check（2026-08-16） ----------
+
+def test_attribution_disabled_default_no_state(monkeypatch):
+    """RESEARCH_ATTRIBUTION 未设 → attribution_check 透传，state 无 qc_attribution。"""
+    monkeypatch.delenv("RESEARCH_ATTRIBUTION", raising=False)
+
+    def fake_llm(prompt, **kwargs):
+        if "作家" in prompt:
+            return "我没问题了"  # 结束循环
+        return "ok"
+
+    graph = build_research_loop_graph(fake_llm, _FakeSearch())
+    final = graph.invoke({"topic": "测试"})
+    assert "qc_attribution" not in final
+    assert "qc_result" in final  # 原有质检不受影响
+
+
+def test_attribution_enabled_writes_report(monkeypatch):
+    """RESEARCH_ATTRIBUTION=1 → qc_attribution 写入且流程不阻断。"""
+    monkeypatch.setenv("RESEARCH_ATTRIBUTION", "1")
+
+    def fake_llm(prompt, **kwargs):
+        if "作家" in prompt:
+            return "我没问题了"
+        return "ok"
+
+    graph = build_research_loop_graph(fake_llm, _FakeSearch())
+    final = graph.invoke({"topic": "测试"})
+    report = final.get("qc_attribution")
+    assert report is not None
+    assert "total_sentences" in report
+    assert "supported_count" in report
+    assert "coverage_ratio" in report
+    assert "qc_result" in final  # 验证不阻断流程，qc 照常执行

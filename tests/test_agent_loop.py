@@ -215,3 +215,47 @@ def test_agent_loop_evidence_dedup():
 def test_tools_contract():
     """工具集常量与实现一致（文档契约）。"""
     assert set(TOOLS) == {"search", "rewrite", "fetch_fulltext", "answer"}
+
+
+def test_run_code_disabled_default_tools():
+    """挂接②：RESEARCH_CODE_SANDBOX 未设时 run_code 不在 TOOLS——决策层拒绝。"""
+    assert "run_code" not in TOOLS  # 默认环境（本测试进程未设开关）
+    run_code_decisions = [
+        json.dumps({"tool": "run_code", "args": {"code": "print({0})".format(i)}})
+        for i in range(5)
+    ]
+    loop = AgentLoop(
+        decide=_decider(*run_code_decisions),
+        search=_search_mock()[0],
+        max_steps=5,
+    )
+    state = loop.run("q")
+    assert state["termination"]["reason"] in ("repeated_invalid_decisions", "max_steps")
+    assert any("unknown tool" in e.get("error", "") for e in state["errors"])
+
+
+def test_run_code_not_configured():
+    """挂接②：run_code 分支存在但执行器未注入 → ok=False 语义。"""
+    loop = AgentLoop(decide=_decider(json.dumps({"tool": "answer"})), search=_search_mock()[0])
+    outcome = loop._execute_tool(
+        {"evidence_pool": []}, "run_code", {"code": "print(1)"}, "q", 5
+    )
+    assert outcome["ok"] is False
+    assert outcome["error"] == "run_code not configured"
+
+
+def test_run_code_injected_passthrough():
+    """挂接②：注入执行器后结果透传（沙箱启用语义由调用方注入）。"""
+    def fake_sandbox(code):
+        assert code == "print(2**8)"
+        return {"ok": True, "stdout": "256", "blocked": False}
+
+    loop = AgentLoop(
+        decide=_decider(json.dumps({"tool": "answer"})),
+        search=_search_mock()[0],
+        run_code=fake_sandbox,
+    )
+    outcome = loop._execute_tool(
+        {"evidence_pool": []}, "run_code", {"code": "print(2**8)"}, "q", 5
+    )
+    assert outcome == {"ok": True, "stdout": "256", "blocked": False}

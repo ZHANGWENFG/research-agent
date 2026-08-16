@@ -24,13 +24,19 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = 5
 
-TOOLS = ("search", "rewrite", "fetch_fulltext", "answer")
+# run_code 工具（缺口②挂接，2026-08-16）：RESEARCH_CODE_SANDBOX=1 才出现。
+# 工具不存在比存在但报错更诚实——LLM 决策层就拒绝未知工具。
+_SANDBOX_ENABLED = os.getenv("RESEARCH_CODE_SANDBOX") == "1"
+TOOLS = ("search", "rewrite", "fetch_fulltext", "answer") + (
+    ("run_code",) if _SANDBOX_ENABLED else ()
+)
 
 
 class AgentLoop:
@@ -44,6 +50,7 @@ class AgentLoop:
         llm_call: Optional[Callable[[str], str]] = None,
         rewrite: Optional[Callable[[str, str, Callable], str]] = None,
         fetch_fulltext: Optional[Callable[[str], Optional[str]]] = None,
+        run_code: Optional[Callable[[str], Dict]] = None,
         evidence_sufficient: Optional[Callable[[Dict], bool]] = None,
         max_steps: int = DEFAULT_MAX_STEPS,
     ):
@@ -52,6 +59,7 @@ class AgentLoop:
         self.llm_call = llm_call
         self.rewrite = rewrite
         self.fetch_fulltext = fetch_fulltext
+        self.run_code = run_code
         self.evidence_sufficient = evidence_sufficient
         self.max_steps = max_steps
 
@@ -149,6 +157,11 @@ class AgentLoop:
                 if not text:
                     return {"ok": False, "error": "fulltext unavailable", "article_id": article_id}
                 return {"ok": True, "tool": "fetch_fulltext", "chars": len(text)}
+            if tool == "run_code":
+                if self.run_code is None:
+                    return {"ok": False, "error": "run_code not configured"}
+                code = str(args.get("code") or "")
+                return self.run_code(code)
             return {"ok": False, "error": "unhandled tool: {0}".format(tool)}
         except Exception as exc:  # noqa: BLE001
             logger.warning("agent loop tool %s failed: %s", tool, exc)

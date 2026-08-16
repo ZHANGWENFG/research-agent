@@ -56,6 +56,7 @@ class ResearchLoopState(TypedDict, total=False):
     cost_estimate: float
     cost_used: float          # 真实成本累计（R4 接线，USD；无真实数据时按估算回退）
     result: Dict[str, Any]
+    qc_attribution: Dict[str, Any]    # 事实性验证报告（缺口①，RESEARCH_ATTRIBUTION=1）
 
 
 # ---------- 工具函数 ----------
@@ -267,6 +268,41 @@ def write_article(state: ResearchLoopState, llm_call: Callable,
     return state
 
 
+def attribution_check(state: ResearchLoopState, llm_call: Callable,
+                      search: Optional[Callable] = None, fulltext: Optional[Callable] = None,
+                      skill_context: str = "") -> ResearchLoopState:
+    """事实性验证（缺口①挂接，2026-08-16）：write_article 后、qc_review 前。
+
+    RESEARCH_ATTRIBUTION=1 时对成文做句子级回链验证（Attributed QA 模式），
+    结果写入 state["qc_attribution"]，**不阻断流程**（qc 报告只读使用）。
+    未启用时节点透传，零计算——图结构固定，开关语义在节点内。
+    """
+    import os
+
+    if os.getenv("RESEARCH_ATTRIBUTION") != "1":
+        return state
+    article = state.get("article")
+    pool = state.get("result", {}).get("citation_pool", [])
+    if not article:
+        state["qc_attribution"] = {"enabled": True, "error": "no article"}
+        return state
+    # citation_pool: [{num, title, url}] → evidence_pool: [{id, content}]
+    evidence_pool = [
+        {"id": item.get("num"), "content": item.get("title") or item.get("url", "")}
+        for item in pool
+    ]
+    from .research_attribution import verify_article
+
+    try:
+        state["qc_attribution"] = verify_article(article, evidence_pool)
+    except Exception as exc:  # noqa: BLE001 —— 验证失败不阻断写作流程
+        logging.getLogger(__name__).warning(
+            "attribution_check failed: %s", exc, exc_info=False
+        )
+        state["qc_attribution"] = {"enabled": True, "error": str(exc)}
+    return state
+
+
 def qc_review(state: ResearchLoopState, llm_call: Callable,
               search: Optional[Callable] = None, fulltext: Optional[Callable] = None,
               skill_context: str = "") -> ResearchLoopState:
@@ -364,6 +400,7 @@ def build_research_loop_graph(llm_call: Callable, search: Callable,
     builder.add_node("writer_ask", lambda s: run_node(s, writer_ask))
     builder.add_node("expert_answer", lambda s: run_node(s, expert_answer))
     builder.add_node("write_article", lambda s: run_node(s, write_article))
+    builder.add_node("attribution_check", lambda s: run_node(s, attribution_check))
     builder.add_node("qc_review", lambda s: run_node(s, qc_review))
 
     builder.add_edge("generate_perspectives", "writer_ask")
@@ -373,7 +410,8 @@ def build_research_loop_graph(llm_call: Callable, search: Callable,
         should_continue,
         {"ask_again": "writer_ask", "exit": "write_article"},
     )
-    builder.add_edge("write_article", "qc_review")
+    builder.add_edge("write_article", "attribution_check")
+    builder.add_edge("attribution_check", "qc_review")
     builder.add_conditional_edges(
         "qc_review",
         should_revise,
