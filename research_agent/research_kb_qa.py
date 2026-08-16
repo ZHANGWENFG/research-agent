@@ -254,7 +254,9 @@ def _first_sentence(text: str):
     text = " ".join(str(text or "").split())
     if not text:
         return ""
-    match = re.search(r"(.+?[。.!?])\s", text + " ")
+    # lookahead: 句号后允许 0+ 空格再接内容（中文无空格连续句/英文空格句都认）
+    # 或直接结尾（旧实现要求句号后必须有空白，中文连续句不切分）
+    match = re.search(r"(.+?[。.!?])(?=\s*(?:\S|$))", text + " ")
     if match:
         return match.group(1)
     return text[:240]
