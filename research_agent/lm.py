@@ -56,9 +56,13 @@ import os
 import random
 import requests
 import threading
+import time
+from collections import deque
 from typing import Optional, Literal, Any
 import ujson
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 try:  # transformers 可选（HF 旧类使用；主线走 litellm 不需要）
@@ -68,11 +72,13 @@ except Exception:  # noqa: BLE001
 
 from openai import OpenAI, AzureOpenAI  # noqa: E402
 
-# Anthropic 的 SDK 可能未安装，用 try/except 做可选依赖
-try:
-    from anthropic import RateLimitError
-except ImportError:
-    RateLimitError = None
+# litellm 的异常体系用于识别"瞬时错误"（可重试）与"业务错误"（重试无意义且烧钱）
+from litellm.exceptions import (  # noqa: E402
+    APIConnectionError,
+    InternalServerError,
+    RateLimitError as LiteLLMRateLimitError,
+    Timeout as LiteLLMTimeout,
+)
 
 ############################
 # 以下代码为 litellm 兼容层（缓存 + completion 基础函数）
@@ -114,6 +120,80 @@ litellm.cache = Cache(disk_cache_dir=disk_cache_dir, type="disk")
 # 注意: LRU cache 的 key 是 request JSON 字符串，所以相同 prompt+参数会命中缓存
 LM_LRU_CACHE_MAX_SIZE = 3000
 
+# ====================================================================
+# 可靠性三件套（2025-2026 主流 LLM 应用最佳实践）:
+#   1. 超时 —— 上游 API 挂起时不被无限占用
+#   2. 指数退避 + jitter 重试 —— 只重试"瞬时错误"（429/5xx/连接/超时），
+#      不重试 4xx 业务错误（重试只会放大费用与延迟）
+#   3. 多 provider fallback —— 主模型失败自动切换备选模型（litellm 原生支持）
+# 全部支持环境变量覆盖，适合部署调参。
+# ====================================================================
+LLM_DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "60"))
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+LLM_RETRY_BASE_DELAY = float(os.environ.get("LLM_RETRY_BASE_DELAY", "1.0"))
+LLM_RETRY_MAX_DELAY = float(os.environ.get("LLM_RETRY_MAX_DELAY", "30.0"))
+# 逗号分隔的备选模型列表，如 "claude/claude-3-5-haiku,gemini/gemini-1.5-flash"
+LLM_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.environ.get("LLM_FALLBACK_MODELS", "").split(",")
+    if m.strip()
+]
+# 历史记录上限（防长驻进程内存泄漏，主流做法: 有界缓冲）
+LM_HISTORY_MAXLEN = int(os.environ.get("LM_HISTORY_MAXLEN", "200"))
+
+# 可重试的瞬时错误集合: litellm 超时/限流/连接/5xx + 底层 HTTP 库的错误
+_TRANSIENT_EXCEPTIONS = (
+    LiteLLMRateLimitError,
+    LiteLLMTimeout,
+    APIConnectionError,
+    InternalServerError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.HTTPError,
+    OSError,
+)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """判断异常是否属于可重试的瞬时错误。
+
+    主流原则: 429(限流)/5xx(服务端瞬时)/连接失败/超时/网络抖动 可重试；
+    400/401/403 等业务错误重试无意义，直接上抛。
+    """
+    for t in _TRANSIENT_EXCEPTIONS:
+        if isinstance(exc, t):
+            return True
+    # litellm 内部错误包装: 检查其 cause 链（如 requests 的 ConnectionError 被包进 OpenAIError）
+    if getattr(exc, "__cause__", None) is not None:
+        return _is_transient(exc.__cause__)
+    return False
+
+
+def _call_with_retry(fn, *, max_retries: Optional[int] = None, **kwargs):
+    """指数退避 + jitter 重试包装（主流可靠性最佳实践）。
+
+    只重试瞬时错误；每次重试前等待 base_delay * 2^(attempt-1)（封顶）加随机 jitter，
+    避免多线程同时重试造成"重试风暴"。
+    """
+    attempts = max_retries if max_retries is not None else LLM_MAX_RETRIES
+    attempt = 0
+    while True:
+        try:
+            return fn(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if not _is_transient(exc) or attempt >= attempts:
+                raise
+            attempt += 1
+            delay = min(
+                LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1)), LLM_RETRY_MAX_DELAY
+            )
+            jitter = random.uniform(0, LLM_RETRY_BASE_DELAY)
+            logger.warning(
+                "LLM 瞬时错误(%s)，%.1fs 后重试 (%d/%d)",
+                type(exc).__name__, delay + jitter, attempt, attempts,
+            )
+            time.sleep(delay + jitter)
+
 
 # ====================================================================
 # LM — 基础抽象类
@@ -142,14 +222,16 @@ class LM:
         self.model = model
         self.model_type = model_type
         self.cache = cache
+        # timeout 默认 60s（主流: LLM 调用必须设超时，否则上游挂起会无限占用线程）
+        kwargs.setdefault("timeout", LLM_DEFAULT_TIMEOUT_SECONDS)
         self.kwargs = dict(temperature=temperature, max_tokens=max_tokens, **kwargs)
-        self.history = []  # 调用历史，调试和 token 统计用
+        self.history = deque(maxlen=LM_HISTORY_MAXLEN)  # 有界历史，防内存泄漏
 
         # OpenAI o1 系列模型有特殊要求: 温度必须为 1.0，max_tokens >= 5000
-        if "o1-" in model:
-            assert (
-                max_tokens >= 5000 and temperature == 1.0
-            ), "OpenAI's o1-* models require passing temperature=1.0 and max_tokens >= 5000 to this LM"
+        if "o1-" in model and not (max_tokens >= 5000 and temperature == 1.0):
+            raise ValueError(
+                "OpenAI's o1-* models require passing temperature=1.0 and max_tokens >= 5000 to this LM"
+            )
 
     def __call__(self, prompt=None, messages=None, **kwargs):
         """
@@ -256,9 +338,16 @@ def litellm_completion(request, cache={"no-cache": True, "no-store": True}):
     cache={"no-cache": True} 的含义:
       - 不读 litellm 磁盘缓存
       - 但会把结果写入磁盘缓存（下次 LRU miss 时可以读到）
+
+    可靠性: 注入默认 timeout；配置了 LLM_FALLBACK_MODELS 时自动加多 provider fallback；
+    调用经 _call_with_retry 做指数退避重试（仅瞬时错误）。
     """
     kwargs = ujson.loads(request)
-    return litellm.completion(cache=cache, **kwargs)
+    kwargs.setdefault("timeout", LLM_DEFAULT_TIMEOUT_SECONDS)
+    if LLM_FALLBACK_MODELS:
+        # litellm 原生多 provider fallback: 主模型失败自动切换备选模型
+        kwargs["fallbacks"] = LLM_FALLBACK_MODELS
+    return _call_with_retry(lambda **k: litellm.completion(cache=cache, **k), **kwargs)
 
 
 @functools.lru_cache(maxsize=LM_LRU_CACHE_MAX_SIZE)
@@ -275,8 +364,13 @@ def litellm_text_completion(request, cache={"no-cache": True, "no-store": True})
     与 chat completion 的区别:
       - text completion 是老式 API，直接给 prompt 字符串
       - chat completion 是对话式 API，给 messages 列表
+
+    可靠性: 与 litellm_completion 一致（timeout + fallback + 重试）。
     """
     kwargs = ujson.loads(request)
+    kwargs.setdefault("timeout", LLM_DEFAULT_TIMEOUT_SECONDS)
+    if LLM_FALLBACK_MODELS:
+        kwargs["fallbacks"] = LLM_FALLBACK_MODELS
 
     # 从 model 字符串解析 provider 和 model 名
     # 例如 "openai/gpt-4o" → provider="openai", model="gpt-4o"
@@ -293,8 +387,8 @@ def litellm_text_completion(request, cache={"no-cache": True, "no-store": True})
         [x["content"] for x in kwargs.pop("messages")] + ["BEGIN RESPONSE:"]
     )
 
-    return litellm.text_completion(
-        cache=cache,
+    return _call_with_retry(
+        lambda **k: litellm.text_completion(cache=cache, **k),
         model=f"text-completion-openai/{model}",
         api_key=api_key,
         api_base=api_base,
@@ -438,11 +532,14 @@ class LitellmModel(LM):
             for c in response["choices"]
         ]
 
+        # 记录调用历史: 去掉 api_ 前缀键，并剥离 response 中内嵌的密钥
         kwargs = {k: v for k, v in kwargs.items() if not k.startswith("api_")}
+        response_dict.pop("_hidden_params", None)
         entry = dict(
             prompt=prompt, messages=messages, kwargs=kwargs, response=response_dict
         )
-        entry = dict(**entry, outputs=outputs, usage=dict(response_dict["usage"]))
+        usage = response_dict.get("usage") or {}
+        entry = dict(**entry, outputs=outputs, usage=dict(usage))
         entry = dict(
             **entry, cost=response.get("_hidden_params", {}).get("response_cost")
         )

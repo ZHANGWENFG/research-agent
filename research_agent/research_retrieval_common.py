@@ -478,20 +478,103 @@ class ResearchLongTermMemoryIndex:
 
 
 def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100):
-    text = " ".join(str(text or "").split())
-    if not text:
+    """按文档结构切分文本（主流 RAG 做法: chunking 是产品决策，尊重段落/句子边界）。
+
+    与旧版"纯字符窗口"的关键区别:
+      1. 段落优先 —— 文本先按换行分块，大段（超过 chunk_size）才继续切，
+         小段（不足 chunk_size）与相邻段合并，保留语义单元；
+      2. 句子边界对齐 —— 必须切分时，在句末标点（。.!?！？）附近找断点，
+         不让英文单词被拦腰截断、不让中文句子被从中间切开；
+      3. 保留段落结构 —— 不再先把空白全部塌缩成单行。
+
+    参数语义与旧版一致: chunk_size 为目标长度（字符），chunk_overlap 为相邻
+    chunk 的重叠字符数（在超长块内部滑动时生效）。
+    """
+    text = str(text or "")
+    if not text.strip():
         return []
     if chunk_overlap >= chunk_size:
         raise ValueError("chunk_overlap must be smaller than chunk_size")
-    chunks = []
+
+    # 第 1 步: 按空行/换行切段落，再按目标长度做结构化合并
+    paragraphs = _split_paragraphs(text)
+    units: List[str] = []
+    current = ""
+    for para in paragraphs:
+        if len(para) >= chunk_size:
+            # 超长段落独立处理: 先把已累积的 unit 落盘
+            if current:
+                units.append(current.strip())
+                current = ""
+            units.extend(_split_long_unit(para, chunk_size, chunk_overlap))
+        elif len(current) + len(para) + 1 <= chunk_size:
+            current = (current + "\n" + para).strip() if current else para
+        else:
+            if current:
+                units.append(current.strip())
+            current = para
+    if current:
+        units.append(current.strip())
+
+    # 第 2 步: 单段仍超长时，在句子边界处回溯切分（不硬切字符）
+    final: List[str] = []
+    for unit in units:
+        if len(unit) <= chunk_size:
+            final.append(unit)
+        else:
+            final.extend(_split_long_unit(unit, chunk_size, chunk_overlap))
+    return [c for c in final if c.strip()]
+
+
+# 段落按空行或换行切分（保留结构，不塌缩空白）
+_PARAGRAPH_RE = re.compile(r"\n\s*\n|\n+")
+
+
+def _split_paragraphs(text: str) -> List[str]:
+    parts = [p for p in _PARAGRAPH_RE.split(text) if p.strip()]
+    return parts or [text.strip()]
+
+
+# 句末标点: 中英文句号/感叹/问号（主流切分点）
+_SENTENCE_END_RE = re.compile(r"[。.!?！？；;]")
+# 避免在句末标点后紧跟数字/缩写处切断（如 "3.14"、"U.S."）
+_NO_SPLIT_AFTER = re.compile(r"(?<=\.)(?=\d)|(?<=\.[A-Za-z])(?=[A-Za-z])")
+
+
+def _split_long_unit(unit: str, chunk_size: int, chunk_overlap: int) -> List[str]:
+    """超长单元在句子边界处切分，窗口内尽量以句末标点收尾。"""
+    step = max(1, chunk_size - chunk_overlap)
+    chunks: List[str] = []
     start = 0
-    step = chunk_size - chunk_overlap
-    while start < len(text):
-        chunk = text[start : start + chunk_size].strip()
+    length = len(unit)
+    while start < length:
+        end = min(start + chunk_size, length)
+        if end < length:  # 不是最后一块 → 尝试回溯到句末标点
+            boundary = _sentence_boundary_before(unit, start, end)
+            if boundary is not None:
+                end = boundary
+        chunk = unit[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        start += step
+        if end >= length:
+            break
+        start = max(end - chunk_overlap, start + 1)  # 保证前进
     return chunks
+
+
+def _sentence_boundary_before(text: str, start: int, end: int) -> Optional[int]:
+    """在 [start, end] 内找最后一个句末标点后的断点；找不到返回 None（硬切）。"""
+    # 从 end 往前找，但至少保留 chunk_size 的 60% 长度，避免切出极短块
+    min_boundary = start + int((end - start) * 0.6)
+    best = None
+    for m in _SENTENCE_END_RE.finditer(text, start, end):
+        pos = m.end()
+        if pos < min_boundary:
+            continue
+        if _NO_SPLIT_AFTER.search(text, pos - 2, pos + 2):
+            continue
+        best = pos
+    return best
 
 
 def hash_embedding(text: str, dim: int = 64):

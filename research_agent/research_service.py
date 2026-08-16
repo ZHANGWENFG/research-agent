@@ -972,6 +972,10 @@ class ResearchTaskService:
         }
 
     def _state_path(self, task_id: str):
+        # 安全校验: task_id 必须是 32 位 hex（uuid4().hex 的格式），
+        # 防止 "../../etc/passwd" 这类路径遍历注入（主流安全实践: 入口白名单校验）
+        if not isinstance(task_id, str) or not re.fullmatch(r"[0-9a-f]{32}", task_id):
+            raise KeyError("Invalid task_id: {0!r}".format(task_id))
         return self.tasks_dir / "{0}.json".format(task_id)
 
     def _read_state(self, task_id: str):
