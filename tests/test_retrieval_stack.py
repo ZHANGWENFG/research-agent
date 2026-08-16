@@ -193,3 +193,59 @@ def test_empty_query_returns_empty(tmp_path):
     assert index.search("", top_k=3) == []
     # 纯停用词（全部在 _QUERY_STOP_TOKENS 中）
     assert index.search("的 与 和 是", top_k=3) == []
+
+
+# ---------- P2: chunk 默认参数（2026-08-16 设计评审） ----------
+
+def test_chunk_overlap_default_is_50():
+    """P2 设计评审: overlap 默认 100→50（2026 基准 50–100 取下限 + arXiv 无收益证据）。"""
+    import inspect
+
+    from research_agent.research_retrieval_common import chunk_text
+
+    assert inspect.signature(chunk_text).parameters["chunk_overlap"].default == 50
+
+
+def test_chunk_text_respects_sentence_boundary():
+    """超长文本切分时优先在句末标点断句，不把句子从中间切开。"""
+    from research_agent.research_retrieval_common import chunk_text
+
+    sentence = "这是第一句完整的内容。这是第二句完整的内容。这是第三句完整的内容。"
+    long_text = sentence * 8  # ~180 字符 × 8 > 500
+    chunks = chunk_text(long_text, chunk_size=200, chunk_overlap=50)
+    assert len(chunks) >= 2
+    # 每个非末尾 chunk 都应整句结尾（句号/感叹/问号），不能是残句
+    for chunk in chunks[:-1]:
+        assert chunk.rstrip().endswith(("。", "！", "？", "!", "?")), \
+            f"chunk 应在句界收尾, got: ...{chunk[-15:]!r}"
+
+
+# ---------- P3: 候选池 5x（2026-08-16 设计评审，对齐 LangChain fetch_k=5k） ----------
+
+def test_candidate_pool_is_five_times_top_k(tmp_path, monkeypatch):
+    """P3: candidate_k 默认 max(top_k*5, 20)（LangChain 同款 5 倍候选池）。"""
+    from research_agent.research_retrieval_index import HybridPaperIndex
+    from research_agent.research_retrieval_common import HashEmbeddingProvider
+
+    # 造 30 个 chunk 的小索引（30 段，每段 > chunk_size 保证 1 段 1 chunk 以上）
+    paragraphs = [
+        "这是第{0}段关于检索质量的测试文本，包含若干关键词用于命中。".format(i) * 6
+        for i in range(10)
+    ]
+    index = HybridPaperIndex.from_documents(
+        [{"document_id": "d", "text": "\n".join(paragraphs)}],
+        embedding_provider=HashEmbeddingProvider(dim=16),
+        chunk_size=100,
+        chunk_overlap=20,
+    )
+    assert len(index.chunks) >= 26, "测试需要 >20 个 chunk 才能验证 5x 上限"
+
+    seen = {}
+
+    def spy_bm25(query, candidate_k):
+        seen["candidate_k"] = candidate_k
+        return []
+
+    monkeypatch.setattr(index, "_bm25_search", spy_bm25)
+    index.search("测试", top_k=5, mode="hybrid")
+    assert seen["candidate_k"] == 25, f"top_k=5 候选池应为 25（5x）, got {seen['candidate_k']}"

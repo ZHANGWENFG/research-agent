@@ -1,12 +1,13 @@
 import hashlib
 import json
+import random
 import sqlite3
 import threading
 import time
 import uuid
 import requests  # noqa: E402
 from contextlib import AbstractContextManager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -234,9 +235,20 @@ class ProductionControlPlane:
         payload: Dict,
         operation,
         wait_timeout_seconds: float = 10.0,
+        retention_hours: float = 24.0,
     ):
         fingerprint = _digest(_json(payload))
         owner_token = uuid.uuid4().hex
+        # 幂等记录保留窗口（Stripe 默认 24h）: 窗口外允许复用键，同时防止表无限
+        # 膨胀；随请求顺带清理，成本 O(窗口外行数)，无需独立后台任务
+        if retention_hours > 0:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(hours=float(retention_hours))
+            ).isoformat()
+            with self._connect() as connection:
+                connection.execute(
+                    "DELETE FROM idempotency WHERE updated_at < ?", (cutoff,)
+                )
         deadline = time.monotonic() + max(0.1, float(wait_timeout_seconds))
         owns_claim = False
         while time.monotonic() < deadline:
@@ -524,13 +536,37 @@ class ProductionControlPlane:
         max_attempts: int = 2,
         failure_threshold: int = 3,
         cooldown_seconds: float = 30,
+        backoff_base_seconds: float = 0.5,
     ):
         circuit = self._get_circuit(operation_name)
+        half_open_probe = False
         if circuit["state"] == "open":
             elapsed = time.time() - float(circuit.get("opened_at") or 0)
             if elapsed < float(cooldown_seconds):
                 error = RuntimeError("Circuit is open for {0}".format(operation_name))
                 return _degraded_result(fallback, error, "open", 0)
+            # cooldown 到点 → half-open 半开探测（AWS 三态模型）:
+            # 原子转换 open→half_open 只放行一个探测请求；其余并发请求
+            # 看到转换失败（rowcount==0）直接拒绝，不会同时涌入探测
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    "UPDATE circuit_breakers SET state='half_open', updated_at=? "
+                    "WHERE operation_name=? AND state='open'",
+                    (_now(), operation_name),
+                )
+                half_open_probe = cursor.rowcount == 1
+            if not half_open_probe:
+                error = RuntimeError(
+                    "Circuit is half-open (probe in flight): {0}".format(
+                        operation_name
+                    )
+                )
+                return _degraded_result(fallback, error, "half_open", 0)
+        elif circuit["state"] == "half_open":
+            error = RuntimeError(
+                "Circuit is half-open (probe in flight): {0}".format(operation_name)
+            )
+            return _degraded_result(fallback, error, "half_open", 0)
         last_error = None
         attempts = 0
         for attempts in range(1, max(1, int(max_attempts)) + 1):
@@ -552,8 +588,23 @@ class ProductionControlPlane:
                 if _is_transient_llm_error(error):
                     last_error = error
                 else:
+                    # 探测请求收到业务响应（即使 4xx）说明链路是通的——
+                    # 恢复 closed 再抛出，避免 half_open 状态残留堵死后续请求
+                    if half_open_probe:
+                        self._set_circuit(operation_name, "closed", 0, 0)
                     raise
+            # 指数退避 + full jitter（AWS 标准模式）:
+            # sleep = uniform(0, base * 2^attempt)，随机化防多客户端同步打点；
+            # 最后一次尝试失败后不再等待（没有下一次尝试了）
+            if attempts < max(1, int(max_attempts)):
+                backoff_cap = float(backoff_base_seconds) * (2 ** (attempts - 1))
+                time.sleep(random.uniform(0.0, backoff_cap))
         failures = int(circuit.get("failure_count") or 0) + attempts
+        if half_open_probe:
+            # 探测失败 → 立即重新 open，等下一个 cooldown 周期再探测
+            # （不再累计 failure_count，探测是独立事件而非连续失败流）
+            self._set_circuit(operation_name, "open", 1, time.time())
+            return _degraded_result(fallback, last_error, "open", attempts)
         state = "open" if failures >= max(1, int(failure_threshold)) else "closed"
         self._set_circuit(
             operation_name, state, failures, time.time() if state == "open" else 0

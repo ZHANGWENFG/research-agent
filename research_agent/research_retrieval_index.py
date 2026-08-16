@@ -215,7 +215,7 @@ class HybridPaperIndex:
         # "拒绝回答"比"答非所问"更符合 relevance gate 的设计哲学
         if not retrieval_query_tokens(query):
             return []
-        candidate_k = min(len(self.chunks), candidate_k or max(top_k * 4, 20))
+        candidate_k = min(len(self.chunks), candidate_k or max(top_k * 5, 20))
         if mode == "bm25":
             selected = self._bm25_search(query, candidate_k)
         elif mode == "dense":
@@ -259,7 +259,7 @@ class HybridPaperIndex:
         documents: Iterable[Dict],
         embedding_provider,
         chunk_size: int = 500,
-        chunk_overlap: int = 100,
+        chunk_overlap: int = 50,
     ):
         from .research_retrieval_common import chunk_text, resolve_article_path
 
@@ -295,7 +295,7 @@ class HybridPaperIndex:
         run_dir,
         embedding_provider,
         chunk_size: int = 500,
-        chunk_overlap: int = 100,
+        chunk_overlap: int = 50,
     ):
         """Build a V4.1 index from a research run dir, same sources as the
         legacy runtime index: polished article plus raw search results."""

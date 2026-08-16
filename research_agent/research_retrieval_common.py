@@ -477,7 +477,7 @@ class ResearchLongTermMemoryIndex:
         return [item for score, _, item in scored[:top_k] if score > 0]
 
 
-def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100):
+def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 50):
     """按文档结构切分文本（主流 RAG 做法: chunking 是产品决策，尊重段落/句子边界）。
 
     与旧版"纯字符窗口"的关键区别:
