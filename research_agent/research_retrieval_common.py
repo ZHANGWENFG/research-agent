@@ -595,7 +595,9 @@ def _normalize_vector(vector: Iterable[float], dim: int):
     if len(values) > dim:
         values = values[:dim]
     norm = math.sqrt(sum(value * value for value in values)) or 1.0
-    return [round(value / norm, 8) for value in vector]
+    # 修复: 必须迭代补齐/截断后的 values，而不是原始 vector——
+    # 否则短向量的 padding、长向量的截断全部丢失，维度契约被破坏
+    return [round(value / norm, 8) for value in values]
 
 
 def cosine_similarity(left: List[float], right: List[float]):
@@ -612,7 +614,18 @@ def lexical_score(query_terms, text_terms):
 
 
 def tokenize(text: str):
-    return set(re.findall(r"[a-zA-Z0-9_\-]+|[\u4e00-\u9fff]+", str(text).lower()))
+    """统一分词（2026-08-16 收敛）: 与 multilingual_tokenize 语义对齐——
+    Latin 词 + CJK unigram/bigram，CJK 范围统一 \u4e00-\u9fff（基本汉字区）。
+    返回 set（去重，兼容旧调用方 hash_embedding 的遍历语义）。
+    """
+    lowered = str(text or "").lower()
+    tokens = re.findall(r"[a-z0-9]+(?:[-./][a-z0-9]+)*", lowered)
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", lowered):
+        tokens.extend(sequence)  # unigram（逐字符，与 multilingual_tokenize 一致）
+        tokens.extend(
+            sequence[index : index + 2] for index in range(len(sequence) - 1)
+        )
+    return set(tokens)
 
 
 def keyword_hits(text: str, keywords: Iterable[str]):

@@ -277,9 +277,11 @@ def evaluate_run(run_dir, case: EvalCase):
         expected_language=case.expected_language,
     )
     trace_score = _score_trace(checks, trace_events)
-    # 总分 = 原有四维（上限 85 分制）+ faithfulness 10 分制 → 归一化到 100
+    # 总分: 各维度权重上限合计 95（completion 20 + retrieval 30 + article 20 + trace 15
+    # + faithfulness 10），归一化到 100 分制——"满分 100"不再有死代码误导
+    MAX_TOTAL = 95.0
     total = completion + retrieval + article_score + trace_score + faithfulness - offtopic_penalty
-    total = max(0.0, min(100.0, total))
+    total = max(0.0, min(MAX_TOTAL, total)) / MAX_TOTAL * 100.0
 
     notes = _build_notes(checks, forbidden_hits, expected_hits, case, source_count)
     return {
@@ -328,7 +330,9 @@ def evaluate_qa_artifact(run_dir, case: EvalCase):
         language_score = 4.0 * min(1.0, chinese_ratio / 0.25)
     forbidden_penalty = 10.0 if forbidden_hits else 0.0
     qa_quality = keyword_score + citation_score + grounded_score + language_score
-    total = max(0.0, min(100.0, qa_quality - forbidden_penalty))
+    # QA 维度权重上限 30（12+8+6+4），归一化到 100 分制（同 evaluate_run 的 95→100 修正）
+    QA_MAX_TOTAL = 30.0
+    total = max(0.0, min(QA_MAX_TOTAL, qa_quality - forbidden_penalty)) / QA_MAX_TOTAL * 100.0
 
     checks = {
         "qa_exists": bool(qa),

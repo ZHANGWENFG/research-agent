@@ -6,8 +6,6 @@ from typing import Callable, Union, List
 
 import requests
 
-from .utils import WebPageHelper
-
 logger = logging.getLogger(__name__)
 
 

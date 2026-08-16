@@ -71,10 +71,7 @@ class ResearchGraphAdapter:
             """深度调研：三源检索切换 + 全文获取 + skill 注入（与 service 主线一致）。"""
             from .research_fulltext import (
                 ApprovalQueue,
-                download_file,
-                fetch_europepmc_fulltext,
-                fetch_pmc_fulltext,
-                is_whitelisted,
+                get_fulltext as _get_fulltext_module,
             )
             from .research_skill import inject_skill, match_skills, scan_skills
 
@@ -98,36 +95,13 @@ class ResearchGraphAdapter:
             )
 
             def get_fulltext(evidence_item):
-                meta = evidence_item.get("meta") or {}
-                pmcid = str(meta.get("pmcid") or "")
-                pmid = str(meta.get("pmid") or "")
-                url = str(evidence_item.get("url") or "")
-                if pmcid:
-                    text = fetch_pmc_fulltext(pmcid)
-                    if text:
-                        return {"ok": True, "source": "pmc", "pmcid": pmcid,
-                                "chars": len(text), "preview": text[:800]}
-                if pmid:
-                    text = fetch_europepmc_fulltext(pmid)
-                    if text:
-                        return {"ok": True, "source": "europepmc", "pmid": pmid,
-                                "chars": len(text), "preview": text[:800]}
-                if url and is_whitelisted(url):
-                    downloaded = download_file(
-                        url, str(self.root_dir / "fulltext")
-                    )
-                    return dict(downloaded, source="whitelist_download", url=url)
-                if url:
-                    record = approval_queue.create(
-                        url=url,
-                        source=str(evidence_item.get("title") or "")[:120],
-                        size_hint=0,
-                        task_id=topic,
-                    )
-                    return {"ok": False, "source": "approval_required",
-                            "approval_id": record["id"], "status": record["status"],
-                            "url": url}
-                return {"ok": False, "source": "none"}
+                # 收敛（2026-08-16）: 唯一实现 research_fulltext.get_fulltext
+                return _get_fulltext_module(
+                    evidence_item,
+                    download_dir=str(self.root_dir / "fulltext"),
+                    approval_queue=approval_queue,
+                    task_id=topic,
+                )
 
             skill_context = ""
             skills_dir = self.task_service.root_dir.parent / "skills"

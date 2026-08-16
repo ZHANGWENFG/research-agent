@@ -847,10 +847,7 @@ class ResearchTaskService:
         """
         from .research_fulltext import (
             ApprovalQueue,
-            download_file,
-            fetch_europepmc_fulltext,
-            fetch_pmc_fulltext,
-            is_whitelisted,
+            get_fulltext as _get_fulltext_module,
         )
         from .research_loop import run_research_loop
         from .research_router_llm import build_chat_llm_callable
@@ -886,53 +883,15 @@ class ResearchTaskService:
         # ② 全文获取（口子1）：审批库与 api.py 共用同一文件（root_dir/approvals.sqlite）
         approval_queue = ApprovalQueue(str(self.root_dir / "approvals.sqlite"))
         fulltext_dir = output_dir / "fulltext"
-
+        # 收敛（2026-08-16）: 全文获取唯一实现是 research_fulltext.get_fulltext，
+        # 这里只做薄封装注入依赖（审批队列/下载目录/task_id），不再重写逻辑
         def get_fulltext(evidence_item: Dict) -> Dict:
-            """专家回答命中文献时触发全文获取，返回结构化信息供回答节点记录。
-
-            优先级：PMC 文本接口 → EuropePMC 文本接口 → 白名单自动下载 → 非白名单审批。
-            """
-            meta = evidence_item.get("meta") or {}
-            pmcid = str(meta.get("pmcid") or "")
-            pmid = str(meta.get("pmid") or "")
-            url = str(evidence_item.get("url") or "")
-            title = str(evidence_item.get("title") or "")[:120]
-            if pmcid:  # 文本接口（最干净，不产生文件）
-                try:
-                    text = fetch_pmc_fulltext(pmcid)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("pmc fulltext failed %s: %s", pmcid, exc)
-                    text = None
-                if text:
-                    return {"ok": True, "source": "pmc", "pmcid": pmcid,
-                            "chars": len(text), "preview": text[:800]}
-            if pmid:  # EuropePMC 文本接口兜底
-                try:
-                    text = fetch_europepmc_fulltext(pmid)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("europepmc fulltext failed %s: %s", pmid, exc)
-                    text = None
-                if text:
-                    return {"ok": True, "source": "europepmc", "pmid": pmid,
-                            "chars": len(text), "preview": text[:800]}
-            if url and is_whitelisted(url):  # 白名单自动下载
-                try:
-                    downloaded = download_file(url, str(fulltext_dir))
-                    return dict(downloaded, source="whitelist_download", url=url)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("whitelist download failed %s: %s", url, exc)
-            if url:  # 非白名单 → 人工审批队列（人在环）
-                try:
-                    record = approval_queue.create(
-                        url=url, source=title, size_hint=0, task_id=state["task_id"]
-                    )
-                    return {"ok": False, "source": "approval_required",
-                            "approval_id": record["id"], "status": record["status"],
-                            "url": url}
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("approval queue create failed %s: %s", url, exc)
-            return {"ok": False, "source": "none",
-                    "reason": "no pmcid/pmid/url"}
+            return _get_fulltext_module(
+                evidence_item,
+                download_dir=str(fulltext_dir),
+                approval_queue=approval_queue,
+                task_id=state["task_id"],
+            )
 
         # ③ skill 注入（口子2）：调研开始前扫描 skills/ 按主题匹配
         skill_context = ""
@@ -985,10 +944,15 @@ class ResearchTaskService:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _write_state(self, task_id: str, state: Dict):
-        self._state_path(task_id).write_text(
+        # 原子写（主流做法）: 先写临时文件再 os.replace，
+        # 避免多线程/多 worker 并发写同一任务文件时写坏 JSON
+        path = self._state_path(task_id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps(_redact(state), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        os.replace(tmp, path)
 
     def _list_tasks_by_status(self, status: str):
         tasks = []

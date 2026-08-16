@@ -315,7 +315,7 @@ def run_retrieval_benchmark(
     )
 
     def run(stack, index):
-        hits, reciprocal, ndcg_scores, latencies = [], [], [], []
+        recalls, hits, reciprocal, ndcg_scores, latencies = [], [], [], [], []
         for case in cases:
             query = str(case.get("query") or "")
             relevant = set(case.get("relevant_chunk_ids") or [])
@@ -326,12 +326,14 @@ def run_retrieval_benchmark(
                 ranked = index.search(query, top_k=top_k)
             latencies.append((time.perf_counter() - started) * 1000)
             ranked_ids = [str(item.get("chunk_id") or "") for item in ranked[:top_k]]
-            hit, mrr, ndcg = _retrieval_metrics(ranked_ids, relevant, top_k)
+            recall, hit, mrr, ndcg = _retrieval_metrics(ranked_ids, relevant, top_k)
             hits.append(hit)
+            recalls.append(recall)
             reciprocal.append(mrr)
             ndcg_scores.append(ndcg)
         return {
-            "recall_at_k": round(statistics.mean(hits), 6) if hits else 0.0,
+            "recall_at_k": round(statistics.mean(recalls), 6) if recalls else 0.0,
+            "hit_at_k": round(statistics.mean(hits), 6) if hits else 0.0,
             "mrr": round(statistics.mean(reciprocal), 6) if reciprocal else 0.0,
             "ndcg_at_k": round(statistics.mean(ndcg_scores), 6) if ndcg_scores else 0.0,
             "p95_latency_ms": round(_percentile(latencies, 0.95), 4) if latencies else 0.0,
@@ -374,7 +376,11 @@ def run_retrieval_benchmark(
 
 def _retrieval_metrics(ranked_ids: List[str], relevant: set, top_k: int):
     relevant = set(relevant)
-    recall = int(any(chunk_id in relevant for chunk_id in ranked_ids[:top_k]))
+    hits = [cid for cid in ranked_ids[:top_k] if cid in relevant]
+    # 真 recall@k: 召回的相关的 / 总相关（分数召回，不是 0/1 hit）
+    recall = len(hits) / len(relevant) if relevant else 0.0
+    # hit@k: 是否至少命中一个（保留作独立指标，语义明确）
+    hit = int(bool(hits))
     mrr = 0.0
     for rank, chunk_id in enumerate(ranked_ids[:top_k], start=1):
         if chunk_id in relevant:
@@ -389,7 +395,7 @@ def _retrieval_metrics(ranked_ids: List[str], relevant: set, top_k: int):
         for rank in range(1, min(top_k, len(relevant)) + 1)
     )
     ndcg = ndcg / ideal if ideal else 0.0
-    return recall, mrr, ndcg
+    return recall, hit, mrr, ndcg
 
 
 def _percentile(values, quantile):

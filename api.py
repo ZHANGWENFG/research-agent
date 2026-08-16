@@ -57,6 +57,20 @@ from research_agent.research_chat_agent import ResearchChatAgent  # noqa: E402
 service = ResearchTaskService(root_dir=str(ROOT_DIR))
 approval_queue = ApprovalQueue(str(ROOT_DIR / "approvals.sqlite"))
 
+# 启动时恢复孤儿任务: 上次进程崩溃/被杀后遗留的 running 任务
+# （daemon 线程退出时状态文件会停在 running，SSE 客户端永远等不到终态）
+# 超过 30 分钟视为 stale → 标记 failed，客户端轮询即可看到终态
+try:
+    _stale_recovery = service.recover_stale_running_tasks(max_age_seconds=1800)
+    if _stale_recovery.get("failed_count"):
+        logger.warning(
+            "启动恢复 %s 个孤儿 running 任务: %s",
+            _stale_recovery["failed_count"],
+            _stale_recovery["failed_task_ids"],
+        )
+except Exception:  # noqa: BLE001
+    logger.exception("启动时恢复 stale 任务失败（不影响服务启动）")
+
 # 会话层：完整会话管理（建会话 / 发消息 / 压缩 / 还原 / 重新生成）
 # 与 /api/chat 的无状态问答不同，这里维护持久化的多轮会话（chat_sessions/*.json）
 chat_agent = ResearchChatAgent(task_service=service)

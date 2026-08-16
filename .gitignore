@@ -6,3 +6,4 @@ storage/
 *.sqlite
 *.sqlite3
 *.pyo
+tasks/

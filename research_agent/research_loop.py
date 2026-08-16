@@ -268,13 +268,17 @@ def qc_review(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopState
         parsed = _parse_json(replies[0] if isinstance(replies, list) else replies)
     except Exception:  # noqa: BLE001
         parsed = None
-    passed = True
+    # fail-closed（修复）: 解析失败时 passed=False，宁可打回重写也不放行
+    # ——"防编引用"是这个系统最核心的信任属性，不能默认放行
+    passed = False
     issues = []
-    scorecard = {"citation_accuracy": 1.0, "coverage": 1.0, "duplication": 1.0, "structure": 1.0}
+    scorecard = {"citation_accuracy": 0.0, "coverage": 0.0, "duplication": 0.0, "structure": 0.0}
     if parsed:
         passed = all(parsed.get(k, True) for k in ("citation_ok", "coverage_ok", "duplication_ok"))
         issues = parsed.get("issues", [])
         scorecard.update(parsed.get("scorecard", {}) or {})
+    else:
+        issues = ["QC 解析失败（LLM 输出非预期 JSON）——按不通过处理"]
     state["qc_result"] = {"passed": passed, "issues": issues, "scorecard": scorecard}
     return state
 

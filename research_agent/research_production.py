@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import requests  # noqa: E402
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,38 @@ class _ClosingSQLiteConnection(sqlite3.Connection):
             return super().__exit__(exc_type, exc_value, traceback)
         finally:
             self.close()
+
+
+def _is_transient_llm_error(error: BaseException) -> bool:
+    """判断异常是否属于可计入熔断的瞬时错误。
+
+    litellm/requests 的异常体系不继承内置 ConnectionError/TimeoutError，
+    因此必须按真实类型判断（主流 LLM 可靠性实践: 429/5xx/连接/超时算瞬时，
+    业务错误不计数，避免把参数错误打进熔断）。
+    """
+    # 内置网络/超时异常（requests 会以原始形态抛出，也是标准库形态）
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    # requests 网络层
+    if isinstance(
+        error,
+        (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+         requests.exceptions.RequestException),
+    ):
+        return True
+    # litellm 异常体系（延迟 import，避免未装时模块加载失败）
+    try:
+        from litellm.exceptions import (
+            APIConnectionError,
+            InternalServerError,
+            RateLimitError,
+            Timeout,
+        )
+        if isinstance(error, (APIConnectionError, InternalServerError, RateLimitError, Timeout)):
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 class ProductionControlPlane:
@@ -250,6 +283,32 @@ class ProductionControlPlane:
                     connection.commit()
                     owns_claim = True
                     break
+                if row["status"] == "running":
+                    # running 租约检查（主流幂等实践: 崩溃后同 key 不能永久卡死）：
+                    # 超过租约期限视为"持有者已死"，允许接管重跑
+                    lease_seconds = max(float(wait_timeout_seconds), 60.0)
+                    updated = row["updated_at"]
+                    if updated:
+                        try:
+                            updated_ts = datetime.fromisoformat(updated)
+                            now_ts = datetime.now(timezone.utc)
+                            if updated_ts.tzinfo is None:
+                                updated_ts = updated_ts.replace(tzinfo=timezone.utc)
+                            expired = (now_ts - updated_ts).total_seconds() > lease_seconds
+                        except ValueError:
+                            expired = False
+                        if expired:
+                            connection.execute(
+                                """
+                                UPDATE idempotency
+                                SET status='running', owner_token=?, updated_at=?
+                                WHERE scope=? AND request_key=?
+                                """,
+                                (owner_token, _now(), scope, key),
+                            )
+                            connection.commit()
+                            owns_claim = True
+                            break
                 connection.commit()
             finally:
                 connection.close()
@@ -484,8 +543,16 @@ class ProductionControlPlane:
                     "circuit_state": "closed",
                     "attempts": attempts,
                 }
-            except (ConnectionError, TimeoutError) as error:
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException) as error:
                 last_error = error
+            except Exception as error:  # noqa: BLE001
+                # litellm 的网络/限流/超时异常是独立体系（不继承内置 ConnectionError），
+                # 这里按异常类型识别瞬时错误；业务错误（4xx/参数错）直接抛出——
+                # 不应被熔断吞掉伪装成降级成功
+                if _is_transient_llm_error(error):
+                    last_error = error
+                else:
+                    raise
         failures = int(circuit.get("failure_count") or 0) + attempts
         state = "open" if failures >= max(1, int(failure_threshold)) else "closed"
         self._set_circuit(
@@ -749,16 +816,25 @@ class ResearchProductionRuntime:
                 trace_id=trace_id,
             )
 
-        outcome = self.control.execute_idempotent(
-            scope="{0}/{1}".format(tenant_id, thread_id),
-            key=request_id,
-            payload=idempotency_payload,
-            operation=run_graph,
+        outcome = self.control.execute_resilient(
+            operation_name="conversation_graph",
+            operation=lambda: self.control.execute_idempotent(
+                scope="{0}/{1}".format(tenant_id, thread_id),
+                key=request_id,
+                payload=idempotency_payload,
+                operation=run_graph,
+            ),
+            fallback={"error": "circuit_open", "graph_result": {}},
+            max_attempts=2,
+            failure_threshold=3,
+            cooldown_seconds=30,
         )
-        result = dict(outcome["result"])
+        result = dict((outcome.get("result") or {}).get("graph_result") or outcome.get("result") or {})
         result["governance"] = {
             "tenant_id": tenant_id,
-            "idempotent_replay": bool(outcome["idempotent_replay"]),
+            "idempotent_replay": bool(outcome.get("idempotent_replay")),
+            "circuit_state": outcome.get("circuit_state", "closed"),
+            "degraded": bool(outcome.get("degraded", False)),
             "control_plane": "sqlite-wal-v4.5",
         }
         return result

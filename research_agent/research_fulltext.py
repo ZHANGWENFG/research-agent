@@ -180,7 +180,23 @@ def download_file(url: str, output_dir: str, max_size: int = MAX_FILE_SIZE) -> D
     if target.suffix.lower() == ".pdf" and not header.startswith(PDF_HEADER):
         target.unlink(missing_ok=True)
         return {"ok": False, "error": "file header is not %PDF"}
-    return {"ok": True, "path": str(target), "size": size}
+    # 提取文本（主流做法: 下载不是终点，全文要进生成链路才能支撑引用）
+    # 提取失败不致命——保留下载成功 + path，preview 降级
+    preview = ""
+    if target.suffix.lower() == ".pdf":
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(str(target))
+            extracted = []
+            for page in reader.pages[:5]:  # 只读前 5 页，防超大 PDF 拖慢
+                page_text = (page.extract_text() or "").strip()
+                if page_text:
+                    extracted.append(page_text)
+            preview = "\n".join(extracted)[:800]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pdf text extraction failed %s: %s", target.name, exc)
+    return {"ok": True, "path": str(target), "size": size, "preview": preview}
 
 
 # ---------- 文本接口（不产生文件，最干净） ----------
@@ -262,42 +278,84 @@ def get_fulltext(
     """按优先级尝试拿全文（四级方案）。
 
     article 元数据字段：pmcid / pmid / doi / url（来自 PubMedRM/ArxivRM 的 meta）。
-    返回：{status: fulltext|abstract|link|failed, content?, url?, approval_id?, message}
+    返回结构兼容旧版闭包契约（ok/source/chars/preview），并带 status 字段:
+      {ok: bool, status: fulltext|link|pending_approval|failed|none,
+       source: pmc|europepmc|whitelist_download|approval_required|none,
+       content?/path?/preview?, approval_id?, url?, message?}
+
+    这是全项目唯一的 get_fulltext 实现（2026-08-16 收敛）：
+    原 service/graph_adapter 各有一份闭包重写，已出现行为漂移——
+    本函数吸收了两份的健壮性（逐步 try/except 降级，单点失败不拖垮整轮检索）。
     """
     pmcid = (article.get("meta") or {}).get("pmcid") or ""
     pmid = (article.get("meta") or {}).get("pmid") or ""
     doi = (article.get("meta") or {}).get("doi") or ""
     url = article.get("url") or ""
+    title = str(article.get("title") or "")[:120]
 
     # 1. 文本接口优先（不产生文件）
     if pmcid:
-        text = fetch_pmc_fulltext(pmcid)
+        try:
+            text = fetch_pmc_fulltext(pmcid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pmc fulltext failed %s: %s", pmcid, exc)
+            text = None
         if text:
-            return {"status": "fulltext", "content": text, "url": url, "method": "pmc_efetch"}
+            return {"ok": True, "status": "fulltext", "source": "pmc",
+                    "pmcid": pmcid, "chars": len(text), "preview": text[:800],
+                    "content": text, "url": url}
     if pmid:
-        text = fetch_europepmc_fulltext(pmid)
+        try:
+            text = fetch_europepmc_fulltext(pmid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("europepmc fulltext failed %s: %s", pmid, exc)
+            text = None
         if text and text.startswith("<"):
-            return {"status": "fulltext", "content": text, "url": url, "method": "europepmc"}
+            return {"ok": True, "status": "fulltext", "source": "europepmc",
+                    "pmid": pmid, "chars": len(text), "preview": text[:800],
+                    "content": text, "url": url}
         if text and text.startswith("http"):
             url = text  # EuropePMC 返回了白名单链接，走下载
 
     # 2. Unpaywall 找 OA 链接（权威凭证）
     if doi:
-        oa_url = lookup_unpaywall(doi, email=email)
+        try:
+            oa_url = lookup_unpaywall(doi, email=email)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("unpaywall lookup failed %s: %s", doi, exc)
+            oa_url = None
         if oa_url:
             url = oa_url
 
     # 3/4. 下载：白名单自动放行，非白名单人工审批
     if url and is_whitelisted(url):
-        result = download_file(url, download_dir)
+        try:
+            result = download_file(url, download_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("whitelist download failed %s: %s", url, exc)
+            result = {"ok": False, "error": repr(exc)}
         if result.get("ok"):
-            return {"status": "fulltext", "content": "", "path": result["path"], "url": url, "method": "whitelist_download"}
-        return {"status": "failed", "message": result.get("error"), "url": url}
+            return {"ok": True, "status": "fulltext", "source": "whitelist_download",
+                    "path": result["path"], "url": url,
+                    "chars": int(result.get("size") or 0),
+                    "preview": f"downloaded:{result.get('size')}B"}
+        return {"ok": False, "status": "failed", "source": "whitelist_download",
+                "message": result.get("error"), "url": url}
 
     if url and approval_queue is not None:
-        approval = approval_queue.create(url, source=article.get("title") or url, task_id=task_id)
-        return {"status": "pending_approval", "approval_id": approval["id"], "url": url,
+        try:
+            approval = approval_queue.create(
+                url=url, source=title, size_hint=0, task_id=task_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("approval queue create failed %s: %s", url, exc)
+            return {"ok": False, "status": "failed", "source": "approval_required",
+                    "url": url, "message": repr(exc)}
+        return {"ok": False, "status": "pending_approval",
+                "source": "approval_required", "approval_id": approval["id"],
+                "status_code": approval["status"], "url": url,
                 "message": "非白名单下载，等待人工审批", "approval": approval}
 
     # 兜底：只给链接
-    return {"status": "link", "url": url, "message": "仅提供原文链接（文本接口未命中且无白名单/审批下载）"}
+    return {"ok": False, "status": "link", "source": "none", "url": url,
+            "message": "仅提供原文链接（文本接口未命中且无白名单/审批下载）"}

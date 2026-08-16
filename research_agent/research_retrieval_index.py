@@ -12,7 +12,7 @@ def multilingual_tokenize(text: str) -> List[str]:
     """Tokenize exact Latin terms and add CJK unigrams/bigrams for BM25."""
     text = str(text or "").lower()
     tokens = re.findall(r"[a-z0-9]+(?:[-./][a-z0-9]+)*", text)
-    for sequence in re.findall(r"[\u3400-\u9fff]+", text):
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", text):
         tokens.extend(sequence)
         tokens.extend(sequence[index : index + 2] for index in range(len(sequence) - 1))
     return tokens
@@ -211,6 +211,10 @@ class HybridPaperIndex:
     ) -> List[Dict]:
         if mode not in {"bm25", "dense", "hybrid", "hybrid_rerank"}:
             raise ValueError("unsupported retrieval mode: {0}".format(mode))
+        # 空查询防护（2026-08-16 修复）: 纯停用词/空查询直接返回空——
+        # "拒绝回答"比"答非所问"更符合 relevance gate 的设计哲学
+        if not retrieval_query_tokens(query):
+            return []
         candidate_k = min(len(self.chunks), candidate_k or max(top_k * 4, 20))
         if mode == "bm25":
             selected = self._bm25_search(query, candidate_k)
@@ -395,6 +399,14 @@ class HybridPaperIndex:
     def load(cls, path, embedding_provider):
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         manifest = payload.get("manifest") or {}
+        # schema_version 校验（2026-08-16 修复）: 持久化格式演进后旧索引必须
+        # 被明确拒绝并提示重建，而不是盲目解析到运行期才报晦涩错误
+        if manifest.get("schema_version") != cls.schema_version:
+            raise ValueError(
+                "index schema mismatch: file={0}, expected={1}（请重建索引）".format(
+                    manifest.get("schema_version"), cls.schema_version
+                )
+            )
         actual_name = str(getattr(embedding_provider, "name", "unknown"))
         actual_dim = int(getattr(embedding_provider, "dim", 0) or 0)
         if manifest.get("embedding_model") != actual_name:

@@ -274,14 +274,25 @@ class LM:
             ujson.dumps(dict(model=self.model, messages=messages, **kwargs))
         )
 
-        # === 解析响应，提取文本 ===
+        # === 解析响应（统一: 优先 dict，兼容 litellm ModelResponse 对象） ===
+        # 剥离 _hidden_params（内嵌 api_key），防密钥经 history/inspect 泄露
+        if hasattr(response, "json"):
+            try:
+                response_dict = response.json()
+            except Exception:  # noqa: BLE001
+                response_dict = {}
+        else:
+            response_dict = response
+        response_dict.pop("_hidden_params", None)
+
+        # 子类钩子: token 统计（LitellmModel 覆盖）
+        self.log_usage(response_dict)
+
+        # === 提取文本 ===
         # response["choices"] 是一个列表，每个元素是一个候选回复
-        # 列表推导式: 遍历每个 choice，提取里面的文本
-        #
         # hasattr(c, "message") 区分两种响应格式:
         #   chat 模式   → c 是对象，文本在 c.message.content
         #   text 模式   → c 是字典，文本在 c["text"]
-        # 这行代码保证无论用哪种 model_type，都能正确拿到文本
         outputs = [
             c.message.content if hasattr(c, "message") else c["text"]
             for c in response["choices"]
@@ -289,14 +300,21 @@ class LM:
 
         # 记录调用历史（去掉 api_key 等敏感信息后再记录）
         kwargs = {k: v for k, v in kwargs.items() if not k.startswith("api_")}
-        entry = dict(prompt=prompt, messages=messages, kwargs=kwargs, response=response)
-        entry = dict(**entry, outputs=outputs, usage=dict(response["usage"]))
+        usage = response_dict.get("usage") or {}
+        entry = dict(
+            prompt=prompt, messages=messages, kwargs=kwargs, response=response_dict
+        )
+        entry = dict(**entry, outputs=outputs, usage=dict(usage))
         entry = dict(
             **entry, cost=response.get("_hidden_params", {}).get("response_cost")
         )
         self.history.append(entry)
 
         return outputs
+
+    def log_usage(self, response):
+        """token 统计钩子: 子类可覆盖（LitellmModel 实现真实累加）。"""
+        pass
 
     def inspect_history(self, n: int = 1):
         """打印最近 n 次 LLM 调用的 prompt 和 completion，调试用"""
@@ -499,53 +517,9 @@ class LitellmModel(LM):
 
         return usage
 
-    def __call__(self, prompt=None, messages=None, **kwargs):
-        """
-        调用 LLM 并返回 completion 列表。
-        与父类 LM.__call__ 的区别:
-        - 额外调用 log_usage() 统计 token
-        - 解析 response.json() 而不是直接使用 response 对象
-        """
-        # dict.pop(key, default) — 取出并删除 "cache" 键，未传入则用实例默认值
-        cache = kwargs.pop("cache", self.cache)
-
-        # 短路 or — messages 为空时用 prompt 构造 user message
-        messages = messages or [{"role": "user", "content": prompt}]
-
-        # ** 字典合并 — 实例默认参数(左) + 调用参数(右)，调用参数覆盖同名键
-        kwargs = {**self.kwargs, **kwargs}
-
-        if self.model_type == "chat":
-            completion = cached_litellm_completion if cache else litellm_completion
-        else:
-            completion = (
-                cached_litellm_text_completion if cache else litellm_text_completion
-            )
-
-        response = completion(
-            ujson.dumps(dict(model=self.model, messages=messages, **kwargs))
-        )
-        response_dict = response.json()
-        self.log_usage(response_dict)
-        outputs = [
-            c.message.content if hasattr(c, "message") else c["text"]
-            for c in response["choices"]
-        ]
-
-        # 记录调用历史: 去掉 api_ 前缀键，并剥离 response 中内嵌的密钥
-        kwargs = {k: v for k, v in kwargs.items() if not k.startswith("api_")}
-        response_dict.pop("_hidden_params", None)
-        entry = dict(
-            prompt=prompt, messages=messages, kwargs=kwargs, response=response_dict
-        )
-        usage = response_dict.get("usage") or {}
-        entry = dict(**entry, outputs=outputs, usage=dict(usage))
-        entry = dict(
-            **entry, cost=response.get("_hidden_params", {}).get("response_cost")
-        )
-        self.history.append(entry)
-
-        return outputs
+    # __call__ 收敛（2026-08-16）: 删除子类重复实现，统一走基类 LM.__call__，
+    # 子类只保留 log_usage 钩子（token 统计）。原重复实现的两处差异
+    # （log_usage 调用 + response.json() 解析）已并入基类。
 
 
 # ========================================================================
