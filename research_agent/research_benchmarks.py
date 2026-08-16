@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Optional
+from typing import Callable, Dict, Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

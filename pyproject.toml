@@ -1,0 +1,17 @@
+# ============================================================
+# Ruff 配置（2026-08-16 新增）
+# lint 只查 F 类（真实 bug）+ E4（导入位置）：
+#   - F821 undefined-name / F403 star-import 是 CI 的第一道真 bug 防线
+#   - E501 line-too-long 不查——行宽由 ruff format 负责（业界标准分工，
+#     Black/ruff format 是唯一权威行宽裁判，lint 不重复执法）
+# ============================================================
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件允许宽松的 lambda 赋值等
+"tests/*" = ["E731"]

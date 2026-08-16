@@ -543,7 +543,6 @@ _NO_SPLIT_AFTER = re.compile(r"(?<=\.)(?=\d)|(?<=\.[A-Za-z])(?=[A-Za-z])")
 
 def _split_long_unit(unit: str, chunk_size: int, chunk_overlap: int) -> List[str]:
     """超长单元在句子边界处切分，窗口内尽量以句末标点收尾。"""
-    step = max(1, chunk_size - chunk_overlap)
     chunks: List[str] = []
     start = 0
     length = len(unit)

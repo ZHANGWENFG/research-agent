@@ -22,6 +22,8 @@ import numpy as np
 
 from pydantic import BaseModel, Field
 
+from .research_retrieval_common import HashEmbeddingProvider
+
 MemoryType = Literal["semantic", "episodic", "procedural", "preference"]
 MemoryStatus = Literal["active", "superseded", "deleted"]
 
@@ -91,7 +93,6 @@ def _canonical_key(content: str, memory_type: str):
         return "user:name"
     digest = hashlib.sha256(_normalize(content).encode("utf-8")).hexdigest()[:16]
     return "{0}:{1}".format(memory_type, digest)
-from .research_retrieval_common import HashEmbeddingProvider
 
 
 class LongTermMemoryService:

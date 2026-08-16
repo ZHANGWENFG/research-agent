@@ -13,7 +13,7 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 
 QUERY_VALIDITY = {"valid", "invalid", "needs_edit"}

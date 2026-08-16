@@ -292,7 +292,7 @@ def run_retrieval_benchmark(
     """Compare the legacy runtime index against the V4.1 stack on the auditable
     100-case seed set and write a JSON + Markdown report with deltas."""
     from .research_eval_v4 import build_seed_dataset
-    from .research_retrieval_common import HashEmbeddingProvider, ResearchRAGIndex
+    from .research_retrieval_common import ResearchRAGIndex
     from .research_retrieval_index import HybridPaperIndex
 
     output_dir = Path(output_dir)

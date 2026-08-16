@@ -7,3 +7,4 @@ storage/
 *.sqlite3
 *.pyo
 tasks/
+.coverage

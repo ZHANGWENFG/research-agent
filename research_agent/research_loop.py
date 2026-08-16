@@ -25,8 +25,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 logger = logging.getLogger(__name__)
@@ -154,7 +152,6 @@ def expert_answer(state: ResearchLoopState, llm_call: Callable, search: Callable
     question = state["questions"][-1]
     if question == END_PHRASE or "没问题" in question:
         return state
-    concurrency = state["parallel_plan"].get("effective", DEFAULT_PARALLEL)
 
     def answer_one(q: str) -> Dict[str, Any]:
         # 1. 拆词

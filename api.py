@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ ROOT_DIR.mkdir(parents=True, exist_ok=True)
 from research_agent.research_fulltext import ApprovalQueue  # noqa: E402
 from research_agent.research_task_status import TaskStatus  # noqa: E402
 from research_agent.research_service import ResearchTaskService  # noqa: E402
-from research_agent.research_skill import match_skills, scan_skills  # noqa: E402
+from research_agent.research_skill import scan_skills  # noqa: E402
 from research_agent.research_chat_agent import ResearchChatAgent  # noqa: E402
 
 service = ResearchTaskService(root_dir=str(ROOT_DIR))

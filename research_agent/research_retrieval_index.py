@@ -7,6 +7,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
+from .research_retrieval_common import chunk_text, resolve_article_path
+
 
 def multilingual_tokenize(text: str) -> List[str]:
     """Tokenize exact Latin terms and add CJK unigrams/bigrams for BM25."""
@@ -261,8 +263,6 @@ class HybridPaperIndex:
         chunk_size: int = 500,
         chunk_overlap: int = 50,
     ):
-        from .research_retrieval_common import chunk_text, resolve_article_path
-
         if chunk_overlap >= chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
         chunks = []

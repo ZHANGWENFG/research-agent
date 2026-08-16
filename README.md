@@ -11,7 +11,7 @@
 | 归属 | 模块 | 说明 |
 |---|---|---|
 | **自研（重写）** | `api.py` | FastAPI 接口 + SSE 推送 + 审批流 + 会话管理（建会话/压缩/还原/重新生成） |
-| **自研（重写）** | `research_agent/research_production.py` | 生产控制面：幂等（SQLite 事务 + owner_token）、熔断、审计、全链路 Span |
+| **自研（重写）** | `research_agent/research_production.py` | 生产控制面：幂等（SQLite 事务 + owner_token + 24h 保留窗口）、熔断（三态含 half-open 探测）、指数退避重试、审计、全链路 Span |
 | **自研（重写）** | `research_agent/research_langgraph.py` + `research_graph_adapter.py` | 主编排状态图：10 节点 + 3 条件路由，RetryPolicy 只挂联网节点 |
 | **自研（重写）** | `research_agent/research_loop.py` | 多角色调研引擎：问/答/写/审 4 Agent 子图 + 6 条硬边界（并发上限/汇合串行/成本护栏/无效计划回退） |
 | **自研（重写）** | `research_agent/research_longterm_memory.py` | 长期记忆服务（写入策略/混合召回/合并） |
@@ -24,7 +24,7 @@
 | **改造（重构自开源）** | `research_agent/research_qa.py`、`research_kb_qa.py` | 调研问答（证据裁判三词判定）+ 知识库问答 |
 | **改造（重构自开源）** | `research_agent/research_retrieval_common.py`、`research_retrieval_runtime.py`、`research_retrieval_index.py` | 混合检索（BM25 + 向量，向量缺失自动降级哈希） |
 | **改造（重构自开源）** | `research_agent/research_pubmed.py`、`research_memory.py` | PubMed 检索、记忆压缩 |
-| **继承（保留原实现）** | `research_agent/lm.py`、`rm.py`、`utils.py` | LM 抽象层（litellm 统一入口）、Arxiv/LocalPDF 检索器、工具函数 |
+| **继承（保留原实现）** | `research_agent/lm.py`、`rm.py` | LM 抽象层（litellm 统一入口）、Arxiv/LocalPDF 检索器（`utils.py` 792 行死代码已于 2026-08-16 删除） |
 
 > 设计主线：**状态本地，能力外部**——记忆、审计、任务、审批、检查点全在本地 SQLite；LLM、检索、全文获取借用外部能力。本地管账，外部借力。
 
@@ -34,6 +34,7 @@
    ```bash
    python -m venv venv
    venv/Scripts/pip install -r requirements.txt   # Windows
+   venv/Scripts/pip install -r requirements-dev.txt  # 测试/CI 依赖（pytest/coverage/ruff）
    ```
    （可选装 sentence-transformers/transformers 启用真实向量；不装自动降级哈希向量）
 2. 配置模型密钥（环境变量，litellm 风格）：`DEEPSEEK_API_KEY` 或 `MINIMAX_API_KEY`
@@ -62,12 +63,34 @@
 - GET /api/admin/status | /api/admin/audit | /api/admin/spans —— 治理面板
 - GET /api/health —— 健康检查
 
+## 质量保障（CI 已验证）
+
+- **测试**：71 个（检索栈 / 评测指标 / 熔断 / 幂等 / 意图路由 / 记忆 / skill / 会话 / 冒烟），离线可跑，不依赖真实 LLM
+- **覆盖率门禁**：48.8%（`--cov-fail-under=45`，起点门槛，逐轮上调）
+- **Lint**：ruff（F 类真实 bug + E4 导入位置），315 错误清零
+- **CI**：`.github/workflows/ci.yml`——Python 3.11/3.12 矩阵、pytest + 覆盖率门禁、ruff；`requirements-dev.txt` 与 CI 严格对应，本地可完整复现
+
+## 参数设计依据（2026-08-16 设计评审落地）
+
+> 每项参数都带业界依据来源，不是拍脑袋。评审全文见 commit `70755e4` 信息与设计评审文档。
+
+| 参数 | 值 | 依据 |
+|---|---|---|
+| RRF 融合常数 k | 60 | Cormack & Clarke, SIGIR'09（原论文默认值）；LangChain `EnsembleRetriever c=60`；Haystack `MultiRetriever` 默认 RRF |
+| 分块大小 / 重叠 | 500 字符 / 50 | 2026 RAG chunking 基准（512 tokens + 50–100 overlap）；NVIDIA（句子边界优先）；arXiv 2601.14123（overlap 无显著收益取下限）；切分按句子边界对齐 |
+| 候选池 candidate_k | max(top_k×5, 20) | LangChain `fetch_k=20 / k=4`（5 倍候选池）；RRF 需要两路交叉提名空间 |
+| 重试退避 | 指数 + full jitter（base 0.5s） | AWS《Exponential Backoff And Jitter》：`sleep=uniform(0, base·2^n)`，防多客户端同步打点 |
+| 熔断阈值 / 冷却 | 3 次 / 30s + half-open 探测 | AWS Prescriptive Guidance 三态模型（open→half-open→closed）；Hystrix 同款 |
+| 幂等保留窗口 | 24h | Stripe《Idempotent Requests》默认 24h（窗口外允许复用键） |
+| 评测指标 | recall@k / MRR / nDCG（TREC 口径） | NIST TREC 官方定义；Manning《Introduction to Information Retrieval》Ch.8 |
+
 ## 目录
 
 - `research_agent/`——核心包（26 个模块）
 - `evaluation/public_benchmarks/`——公开评测（SciFact/QASPER/LongMemEval，验收不退化）
 - `skills/`——skill 领域知识包（每领域一个 SKILL.md：术语/视角/检索词/注意）
 - `storage/`——运行数据（任务/审批/记忆/检查点，SQLite + JSON）
+- `.github/workflows/`——CI（测试 + 覆盖率门禁 + lint）
 
 ## 关键设计（详见《my-agent-项目全解.md》）
 
@@ -82,4 +105,4 @@
 
 ## License
 
-MIT License. 基于开源项目 PaperStorm（MIT, Stanford OVAL）fork 并重构；LM 抽象层、检索器、工具函数保留原实现。
+MIT License. 基于开源项目 PaperStorm（MIT, Stanford OVAL）fork 并重构；LM 抽象层、检索器保留原实现。

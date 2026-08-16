@@ -58,7 +58,7 @@ import requests
 import threading
 import time
 from collections import deque
-from typing import Optional, Literal, Any
+from typing import Optional, Literal
 import ujson
 from pathlib import Path
 
@@ -70,7 +70,6 @@ try:  # transformers 可选（HF 旧类使用；主线走 litellm 不需要）
 except Exception:  # noqa: BLE001
     AutoTokenizer = None
 
-from openai import OpenAI, AzureOpenAI  # noqa: E402
 
 # litellm 的异常体系用于识别"瞬时错误"（可重试）与"业务错误"（重试无意义且烧钱）
 from litellm.exceptions import (  # noqa: E402
@@ -85,7 +84,7 @@ from litellm.exceptions import (  # noqa: E402
 # 用于提供基于 litellm 的缓存 + completion 基础函数
 ############################
 
-import warnings
+import warnings  # noqa: E402
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -101,7 +100,8 @@ with warnings.catch_warnings():
     # 关闭 litellm 的遥测数据上报
     litellm.telemetry = False
 
-from litellm.caching.caching import Cache
+# E402: 必须在上面的环境变量块之后导入（LITELLM_LOCAL_MODEL_COST_MAP 需先生效）
+from litellm.caching.caching import Cache  # noqa: E402
 
 # 磁盘缓存目录: ~/.myagent_llm_cache
 # 注意: 这是 litellm 层面的缓存，与下面的 LRU 内存缓存是两个独立层
