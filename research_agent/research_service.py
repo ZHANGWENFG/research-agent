@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from .research_eval import EvalCase, evaluate_run, write_scorecards
 from .research_kb_qa import ResearchKnowledgeBase, write_qa_artifact
@@ -907,13 +907,20 @@ class ResearchTaskService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("skill inject skipped: %s", exc)
 
-        result = run_research_loop(
-            topic,
-            llm_call=chat_llm,
-            search=search,
-            fulltext=get_fulltext,
-            skill_context=skill_context,
-        )
+        # 缺口 4 挂接（2026-08-16）: RESEARCH_PARALLEL=1 走真·多视角并行
+        # （ThreadPoolExecutor），否则走原串行 STORM 循环——零行为变化
+        if os.getenv("RESEARCH_PARALLEL") == "1":
+            result = self._run_parallel_research(
+                state, topic, chat_llm, search, skill_context, retriever_used,
+            )
+        else:
+            result = run_research_loop(
+                topic,
+                llm_call=chat_llm,
+                search=search,
+                fulltext=get_fulltext,
+                skill_context=skill_context,
+            )
         article = result.get("article") or ""
         (output_dir / ARTICLE_FILENAME).write_text(
             article, encoding="utf-8"
@@ -928,6 +935,76 @@ class ResearchTaskService:
             "perspectives": result.get("perspectives", []),
             "scorecard": result.get("scorecard", {}),
             "qc_passed": result.get("qc_passed", False),
+        }
+
+    # ---------- 缺口 4: 真·多代理并行（RESEARCH_PARALLEL=1 启用） ----------
+
+    def _run_parallel_research(
+        self,
+        state: Dict,
+        topic: str,
+        chat_llm,
+        search: Callable,
+        skill_context: str,
+        retriever_used: str,
+    ) -> Dict:
+        """并行版本调研：多视角线程并行（检索+合成）→ 聚合文章。
+
+        复用 generate_perspectives 产出视角（STORM），执行阶段升级为
+        ThreadPoolExecutor 真并行；失败隔离保证单视角失败不拖垮整体。
+        """
+        from .research_loop import generate_perspectives
+        from .research_parallel import run_parallel_perspectives
+
+        output_dir = Path(state["output_dir"])
+        # 视角生成（与串行同一入口，失败回退 1 视角 + 并发 1）
+        plan_state = {"topic": topic}
+        generate_perspectives(
+            plan_state,
+            llm_call=chat_llm,
+            search=search,
+            fulltext=None,
+            skill_context=skill_context,
+        )
+        perspectives = plan_state.get("perspectives") or ["通用视角"]
+
+        def search_fn(query: str, top_k: int):
+            results = search(query)  # rm.forward(query) → 统一格式 list
+            return [dict(item) for item in (results or [])]
+
+        parallel = run_parallel_perspectives(
+            topic,
+            perspectives,
+            llm_call=chat_llm,
+            search=search_fn,
+            max_workers=3,
+            top_k=3,
+        )
+        sections = [
+            "## {0}\n\n{1}".format(s["perspective"], s["paragraph"])
+            for s in parallel["sections"]
+            if s["paragraph"]
+        ]
+        article = "\n\n".join(sections) or "（并行调研未产出内容）"
+        (output_dir / ARTICLE_FILENAME).write_text(article, encoding="utf-8")
+        (output_dir / "research_parallel_result.json").write_text(
+            json.dumps(parallel, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        state["result_summary"] = {
+            "loop": "parallel-perspectives",
+            "retriever": retriever_used,
+            "skill_injected": bool(skill_context),
+            "perspectives": perspectives,
+            "parallel_workers": parallel["parallel"]["workers"],
+            "failed_views": len(parallel["errors"]),
+            "converged": parallel["converged"],
+        }
+        return {
+            "article": article,
+            "perspectives": perspectives,
+            "scorecard": {"converged": parallel["converged"]},
+            "qc_passed": parallel["converged"],
+            "citation_pool": parallel["evidence"],
         }
 
     def _state_path(self, task_id: str):
