@@ -44,6 +44,49 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="my-agent Paper Research Agent", version="1.0.0")
 
+# ---------- 访问控制（R1, 2026-08-16 新增） ----------
+# 依据: OWASP API Security Top 10 (2023) API4——无资源限制的 API 可被 farmed
+# 导致 LLM 账单激增; REST Security Cheat Sheet——无访问控制的公共服务会被爬取。
+# 本地单机默认不强制（保持 SINGLE_USER_MODE 语义）; 设置 MY_AGENT_API_KEY 即
+# 强制校验; 限流始终生效（防误暴露到内网/公网）。
+# E402: 访问控制中间件随 app 定义插入，import 有意后置
+import os  # noqa: E402
+
+from fastapi import Request  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+API_KEY = os.environ.get("MY_AGENT_API_KEY", "")
+RATE_LIMIT_PER_MINUTE = max(1, int(os.environ.get("MY_AGENT_RATE_LIMIT", "60")))
+
+# 每 IP 滑动窗口限流（进程内计数，单机部署足够; 多进程部署需外部存储）
+_requests_log: dict = {}
+_requests_lock = threading.Lock()
+
+
+@app.middleware("http")
+async def access_control(request: Request, call_next):
+    # 健康检查不鉴权不限流（探活语义）
+    if request.url.path == "/api/health":
+        return await call_next(request)
+    # 鉴权: 设置了 MY_AGENT_API_KEY 则请求必须带匹配的 X-API-Key 头
+    if API_KEY and request.headers.get("X-API-Key", "") != API_KEY:
+        return JSONResponse(
+            status_code=401, content={"detail": "invalid or missing API key"}
+        )
+    # 限流: 每 IP 每分钟 N 次（401 也算一次，防暴力枚举 key）
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _requests_lock:
+        window = _requests_log.setdefault(client_ip, [])
+        while window and window[0] < now - 60.0:
+            window.pop(0)
+        if len(window) >= RATE_LIMIT_PER_MINUTE:
+            return JSONResponse(
+                status_code=429, content={"detail": "rate limit exceeded"}
+            )
+        window.append(now)
+    return await call_next(request)
+
 # 运行根目录（存储：任务 / SQLite / 产物）
 ROOT_DIR = Path(__file__).resolve().parent / "storage"
 ROOT_DIR.mkdir(parents=True, exist_ok=True)

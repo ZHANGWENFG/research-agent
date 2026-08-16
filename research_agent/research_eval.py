@@ -13,7 +13,7 @@ class EvalCase:
     expected_keywords: List[str] = field(default_factory=list)
     forbidden_keywords: List[str] = field(default_factory=list)
     expected_language: str = "original"
-    min_sources: int = 1
+    min_sources: int = 2
 
     @classmethod
     def from_dict(cls, data):
@@ -22,7 +22,7 @@ class EvalCase:
             expected_keywords=data.get("expected_keywords") or [],
             forbidden_keywords=data.get("forbidden_keywords") or [],
             expected_language=data.get("expected_language", "original"),
-            min_sources=int(data.get("min_sources", 1)),
+            min_sources=int(data.get("min_sources", 2)),
         )
 
 

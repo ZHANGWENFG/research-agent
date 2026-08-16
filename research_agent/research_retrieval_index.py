@@ -177,7 +177,9 @@ class HybridPaperIndex:
             from rank_bm25 import BM25Okapi
         except ImportError as exc:
             raise RuntimeError("V4.1 BM25 requires dependency rank-bm25") from exc
-        self._bm25 = BM25Okapi(self._tokens)
+        # k1=1.5, b=0.75 为 Robertson 标准参数（R7, 2026-08-16 显式化）:
+        # rank_bm25 默认值恰是 BM25 论文标准，显式传入防止未来被"优化"改掉
+        self._bm25 = BM25Okapi(self._tokens, k1=1.5, b=0.75)
         self.embeddings = embeddings or embedding_provider.embed(
             [self._search_text(item) for item in self.chunks]
         )

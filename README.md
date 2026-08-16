@@ -38,6 +38,15 @@
    ```
    （可选装 sentence-transformers/transformers 启用真实向量；不装自动降级哈希向量）
 2. 配置模型密钥（环境变量，litellm 风格）：`DEEPSEEK_API_KEY` 或 `MINIMAX_API_KEY`
+
+   可选配置（均有安全/资源语义，见「参数设计依据」）：
+   ```bash
+   export MY_AGENT_API_KEY="xxx"               # 设置后所有 /api/* 需带 X-API-Key 头（OWASP API4 防滥用）
+   export MY_AGENT_RATE_LIMIT="60"             # 每 IP 每分钟请求上限（默认 60）
+   export MY_AGENT_MODEL_CONTEXT_TOKENS="128000"  # 主模型上下文窗口（默认 32768）
+   ```
+
+   > **安全提醒**：服务默认绑 127.0.0.1。除非配合 API_KEY 使用，否则**不要** `--host 0.0.0.0`——单用户放行模式下暴露到公网等于把 LLM 调用额度拱手让人（OWASP API4:2023 无限流风险）。
 3. 启动服务：
    ```bash
    TIKTOKEN_CACHE_DIR=~/.tiktoken-cache venv/Scripts/python -m uvicorn api:app --port 8000
@@ -82,6 +91,11 @@
 | 重试退避 | 指数 + full jitter（base 0.5s） | AWS《Exponential Backoff And Jitter》：`sleep=uniform(0, base·2^n)`，防多客户端同步打点 |
 | 熔断阈值 / 冷却 | 3 次 / 30s + half-open 探测 | AWS Prescriptive Guidance 三态模型（open→half-open→closed）；Hystrix 同款 |
 | 幂等保留窗口 | 24h | Stripe《Idempotent Requests》默认 24h（窗口外允许复用键） |
+| API 鉴权 / 限流 | 可选 X-API-Key + 每 IP 60 次/分 | OWASP API Top10（2023）API4 无限流→DoS+账单激增；REST Security Cheat Sheet |
+| 评测最小来源数 | 2 | 至少两个独立证据（单点来源的系统性偏差无法暴露） |
+| 上下文窗口 | 环境变量可配，默认 32k | 现代模型 128k/200k 常见，写死 32k 浪费大模型窗口、小模型会爆 |
+| 成本护栏 | 真实成本累计（估算回退） | 护栏必须基于真实计费（litellm completion_cost），固定估算对贵模型差 100 倍 |
+| MMR 多样性 | λ=0.7（冗余惩罚 0.3） | LangChain/Elastic 默认 0.5；MetricGate 实测 sweet spot [0.5, 0.7] |
 | 评测指标 | recall@k / MRR / nDCG（TREC 口径） | NIST TREC 官方定义；Manning《Introduction to Information Retrieval》Ch.8 |
 
 ## 目录

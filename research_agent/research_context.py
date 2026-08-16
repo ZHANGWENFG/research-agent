@@ -1,6 +1,7 @@
 """Layered, auditable context governance for Research v5.6."""
 
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -9,6 +10,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
+
+def _context_tokens_from_env() -> int:
+    """从环境变量读取上下文窗口；非法值回退默认 32768（R3）。"""
+    raw = os.environ.get("MY_AGENT_MODEL_CONTEXT_TOKENS", "32768")
+    try:
+        return max(1024, int(raw))
+    except (TypeError, ValueError):
+        return 32768
+
 
 def estimate_tokens(text: str):
     text = str(text or "")
@@ -28,7 +38,12 @@ LAYER_NAMES = ("pinned", "active", "summary", "memory", "evidence", "artifact")
 
 @dataclass
 class ContextEngineConfigCore:
-    model_context_tokens: int = 32768
+    # 模型上下文窗口（R3, 2026-08-16）: 写死 32768 是 GPT-4 时代标准，现代模型
+    # 128k/200k 常见——写死会浪费大模型窗口、小模型则会爆；改为环境变量可配。
+    # 依据: 上下文窗口随模型而异，应由部署方对齐主模型（litellm 模型元数据）。
+    model_context_tokens: int = field(
+        default_factory=lambda: _context_tokens_from_env()
+    )
     output_reserve_tokens: int = 4096
     soft_watermark: float = 0.72
     high_watermark: float = 0.9

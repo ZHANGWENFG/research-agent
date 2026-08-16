@@ -54,6 +54,7 @@ class ResearchLoopState(TypedDict, total=False):
     qc_result: Dict[str, Any]
     revise_count: int
     cost_estimate: float
+    cost_used: float          # 真实成本累计（R4 接线，USD；无真实数据时按估算回退）
     result: Dict[str, Any]
 
 
@@ -89,6 +90,8 @@ def _estimate_cost(turns: int, parallel: int) -> float:
 # ---------- 节点实现 ----------
 
 def generate_perspectives(state: ResearchLoopState, llm_call: Callable,
+                          search: Optional[Callable] = None,
+                          fulltext: Optional[Callable] = None,
                           skill_context: str = "") -> ResearchLoopState:
     """生成视角 + 并行计划。失败回退：1 个视角 + 并发 1（硬边界⑥）。
 
@@ -116,6 +119,15 @@ def generate_perspectives(state: ResearchLoopState, llm_call: Callable,
         perspectives = [p.get("name", "视角") for p in parsed["perspectives"][:3]]
         parallel = _clamp_parallel((parsed.get("parallel") or {}).get("suggested_concurrency"))
     state["perspectives"] = perspectives
+    # 成本预警（R4 接线，2026-08-16）: 触发前估算——并发跑满 MAX_TURNS 的
+    # 预计成本超预警线 → 强制降并发到 1（"超预警降并发"语义，此前只存在于
+    # docstring 纸面）。估算单价见 PER_LLM_CALL_USD。
+    if _estimate_cost(MAX_TURNS, parallel) >= COST_WARN:
+        logger.warning(
+            "cost warn: estimated %.4f >= %.2f, forcing concurrency 1",
+            _estimate_cost(MAX_TURNS, parallel), COST_WARN,
+        )
+        parallel = 1
     state["parallel_plan"] = {"suggested_concurrency": parallel, "effective": parallel}
     state["turn"] = 0
     state["questions"] = []
@@ -124,7 +136,9 @@ def generate_perspectives(state: ResearchLoopState, llm_call: Callable,
     return state
 
 
-def writer_ask(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopState:
+def writer_ask(state: ResearchLoopState, llm_call: Callable,
+               search: Optional[Callable] = None, fulltext: Optional[Callable] = None,
+               skill_context: str = "") -> ResearchLoopState:
     """作家提问：带视角、基于已有信息补漏；想结束输出固定结束语。"""
     perspective = state["perspectives"][0] if state["perspectives"] else "通用视角"
     history = ""
@@ -206,16 +220,20 @@ def expert_answer(state: ResearchLoopState, llm_call: Callable, search: Callable
 
 
 def should_continue(state: ResearchLoopState) -> str:
-    """条件边：问够 / 轮数上限 / 超时 → exit；否则回 writer_ask。"""
+    """条件边：问够 / 轮数上限 / 成本硬顶 / 超时 → exit；否则回 writer_ask。"""
     last_q = state["questions"][-1] if state["questions"] else ""
     if last_q == END_PHRASE or "没问题" in last_q:
         return "exit"
     if state.get("turn", 0) >= MAX_TURNS:
         return "exit"
+    if float(state.get("cost_used", 0.0) or 0.0) >= COST_HARD:
+        return "exit"
     return "ask_again"
 
 
-def write_article(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopState:
+def write_article(state: ResearchLoopState, llm_call: Callable,
+                  search: Optional[Callable] = None, fulltext: Optional[Callable] = None,
+                  skill_context: str = "") -> ResearchLoopState:
     """写作：先提纲后正文。引用编号必须来自真实结果池（防编引用）。"""
     info = "\n".join(
         f"Q: {qa.get('question')}\nA: {qa.get('answer')}"
@@ -249,7 +267,9 @@ def write_article(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopS
     return state
 
 
-def qc_review(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopState:
+def qc_review(state: ResearchLoopState, llm_call: Callable,
+              search: Optional[Callable] = None, fulltext: Optional[Callable] = None,
+              skill_context: str = "") -> ResearchLoopState:
     """质检：三样检查（引用真实性 / 覆盖完整 / 重复段落）+ 评分卡 + 打回建议。"""
     pool = state.get("result", {}).get("citation_pool", [])
     prompt = (
@@ -277,15 +297,19 @@ def qc_review(state: ResearchLoopState, llm_call: Callable) -> ResearchLoopState
     else:
         issues = ["QC 解析失败（LLM 输出非预期 JSON）——按不通过处理"]
     state["qc_result"] = {"passed": passed, "issues": issues, "scorecard": scorecard}
+    # 打回计数（2026-08-16 修复）: 原实现在条件边函数里改 state——LangGraph
+    # 条件边是纯路由函数，对 state 的修改不保证写回，导致 revise_count 永不
+    # 增长、QC 打回时图无限递归到 langgraph 上限。计数必须由节点改（节点
+    # 返回的 state 保证合并）。
+    state["revise_count"] = state.get("revise_count", 0) + 1
     return state
 
 
 def should_revise(state: ResearchLoopState) -> str:
-    """条件边：合格 → exit；不合格且 <2 次 → 打回写作；否则强制出稿。"""
+    """条件边（只读，不再改 state）: 合格 → exit；不合格且 <2 次 → 打回；否则强制出稿。"""
     if state.get("qc_result", {}).get("passed", True):
         return "exit"
-    if state.get("revise_count", 0) < MAX_REVISE:
-        state["revise_count"] = state.get("revise_count", 0) + 1
+    if state.get("revise_count", 0) <= MAX_REVISE:
         return "revise"
     return "force_exit"
 
@@ -301,19 +325,46 @@ def build_research_loop_graph(llm_call: Callable, search: Callable,
       ① 并发上限：expert_answer 内线程池 max_workers 由 _clamp_parallel 封顶（此处串行逐问，多问题并发在扩展中）
       ② 汇合点：write_article/qc_review 只在循环出口后进入（图结构）
       ③ 循环内串行：answer_one 内步骤顺序调用
-      ④ 成本护栏：generate_perspectives 后校验，超硬顶直接置空 result 短路
+      ④ 成本护栏（R4 接线，2026-08-16）：llm_call 包 tracked 层累计真实成本
+         （llm_call 返回 dict 含 cost_usd 时取真实值，否则按估算回退），
+         每节点返回前把累计写入 state.cost_used；should_continue 超 COST_HARD 退出，
+         generate_perspectives 超 COST_WARN 降并发。此前护栏只存在于 docstring。
       ⑥ 无效计划回退：_parse_json 失败 → 默认
     """
     from langgraph.graph import END, StateGraph
 
+    # tracked llm 层: 累计成本（真实优先，估算回退），保持原调用契约不变
+    cost_box: Dict = {"usd": 0.0}
+
+    def tracked_llm(prompt: str, **kwargs):
+        raw = llm_call(prompt, **kwargs)
+        if isinstance(raw, dict) and "text" in raw:
+            # 增强契约: {"text": ..., "cost_usd": ...} —— 真实成本
+            cost_box["usd"] += float(raw.get("cost_usd") or 0.0)
+            # 适配节点契约: 多数节点取 replies[0]，包成 list[str]
+            return [str(raw["text"])]
+        cost_box["usd"] += PER_LLM_CALL_USD  # 估算回退（旧契约）
+        return raw
+
+    # 统一节点 wrapper: 执行后把累计成本同步进 state（should_continue 依赖它）
+    def run_node(state, node_fn):
+        result = node_fn(
+            state, tracked_llm,
+            search=search, fulltext=fulltext, skill_context=skill_context,
+        )
+        if isinstance(result, dict):
+            result["cost_used"] = cost_box["usd"]
+        return result
+
     builder = StateGraph(ResearchLoopState)
-    builder.add_node("generate_perspectives",
-                     lambda s: generate_perspectives(s, llm_call, skill_context))
-    builder.add_node("writer_ask", lambda s: writer_ask(s, llm_call))
-    builder.add_node("expert_answer",
-                     lambda s: expert_answer(s, llm_call, search, fulltext, skill_context))
-    builder.add_node("write_article", lambda s: write_article(s, llm_call))
-    builder.add_node("qc_review", lambda s: qc_review(s, llm_call))
+    builder.add_node(
+        "generate_perspectives",
+        lambda s: run_node(s, generate_perspectives),
+    )
+    builder.add_node("writer_ask", lambda s: run_node(s, writer_ask))
+    builder.add_node("expert_answer", lambda s: run_node(s, expert_answer))
+    builder.add_node("write_article", lambda s: run_node(s, write_article))
+    builder.add_node("qc_review", lambda s: run_node(s, qc_review))
 
     builder.add_edge("generate_perspectives", "writer_ask")
     builder.add_edge("writer_ask", "expert_answer")
@@ -350,4 +401,5 @@ def run_research_loop(topic: str, llm_call: Callable, search: Callable,
         "citation_pool": final.get("result", {}).get("citation_pool", []),
         "perspectives": final.get("perspectives", []),
         "info_table": final.get("info_table", []),
+        "cost_used_usd": float(final.get("cost_used", 0.0) or 0.0),
     }

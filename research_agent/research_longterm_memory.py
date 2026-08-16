@@ -602,19 +602,34 @@ class LongTermMemoryService:
         return dict(payload, candidate_id=candidate_id, namespace=namespace, status="pending")
 
 
-def _mmr_select(ranked, top_k, diversity=0.2):
+def _mmr_select(ranked, top_k, diversity=0.3):
+    # diversity 冗余惩罚系数（R5, 2026-08-16）: 0.2→0.3（对应 λ=0.7）。
+    # 依据: LangChain lambda_mult=0.5、Elastic MMR 0.5、MetricGate 实测 sweet
+    # spot [0.5, 0.7]——记忆召回去重价值大（近重复记忆浪费 token 且可能互相
+    # 矛盾），λ 0.7 保留多数相关性同时显著提升多样性。
+    #
+    # 修复（2026-08-16）: 旧实现把已选元素的 _vector pop 掉后才放进 selected，
+    # 后续迭代 redundancy 拿不到向量恒为 0——diversity 参数从未生效。
+    # 现在: 冗余计算期间保留 _vector，返回前统一清理。
     selected = []
     remaining = list(ranked)
     while remaining and len(selected) < top_k:
         def score(item):
             relevance = item["scores"]["final"]
-            redundancy = max((_cosine(item.get("_vector", []), chosen.get("_vector", [])) for chosen in selected), default=0.0)
+            redundancy = max(
+                (
+                    _cosine(item.get("_vector", []), chosen.get("_vector", []))
+                    for chosen in selected
+                ),
+                default=0.0,
+            )
             return relevance - diversity * max(0.0, redundancy)
+
         best = max(remaining, key=score)
         remaining.remove(best)
-        best = dict(best)
-        best.pop("_vector", None)
         selected.append(best)
+    for item in selected:
+        item.pop("_vector", None)
     return selected
 
 
