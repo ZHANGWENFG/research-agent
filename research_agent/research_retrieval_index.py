@@ -212,6 +212,7 @@ class HybridPaperIndex:
         candidate_k: Optional[int] = None,
         reranker=None,
         rank_constant: int = 60,
+        diversity_lambda: Optional[float] = None,
     ) -> List[Dict]:
         if mode not in {"bm25", "dense", "hybrid", "hybrid_rerank"}:
             raise ValueError("unsupported retrieval mode: {0}".format(mode))
@@ -238,6 +239,14 @@ class HybridPaperIndex:
                 selected = reranker.rerank(query, selected, top_k=top_k)
             else:
                 selected = list(reranker(query, selected))[:top_k]
+        elif diversity_lambda is not None:
+            # MMR 多样性重排（P2-A2, Carbonell & Goldstein SIGIR'98）:
+            # 在候选级做相关性×多样性权衡后截断 top_k。缺省 None 时行为不变。
+            from .research_diversity import mmr_rerank
+
+            selected = mmr_rerank(
+                selected, lambda_=diversity_lambda, top_k=top_k
+            )
         else:
             selected = selected[:top_k]
         output = []

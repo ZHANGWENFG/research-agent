@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Dict, List, Optional
@@ -108,10 +109,12 @@ class PubMedRM:
         current_lines: List[str] = []
         for line in text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("1. ") or stripped.isdigit():
+            # NCBI 输出以 "1. PMID" / "2. PMID" ... 编号分隔——旧实现只认
+            # "1. " 导致多篇摘要的后续分隔符被当正文吞掉（真实 bug，B1 测试抓到）
+            if re.match(r"^\d+\. \d+$", stripped) or stripped.isdigit():
                 if current_pmid and current_lines:
                     blocks[current_pmid] = "\n".join(current_lines).strip()
-                current_pmid = stripped.replace("1. ", "").strip()
+                current_pmid = stripped.split(". ")[-1].strip()
                 current_lines = []
             else:
                 if current_pmid:

@@ -58,7 +58,8 @@ class ProductionControlPlane:
     """SQLite WAL control plane for the local production-governance baseline.
 
     【改造】SINGLE_USER_MODE=True：本地单机运行，authorize 直接放行（保留审计），
-    幂等/熔断/审计/span 全部保留；多租户 ACL 代码仍在，置 False 可恢复。
+    幂等/熔断/审计/span 全部保留；多租户能力暂不考虑（用户指令 2026-08-16），
+    签名保留仅为兼容调用方，后续单机语义不再扩展租户维度。
     """
 
     # 【改造】单用户模式开关（默认开）
@@ -155,7 +156,7 @@ class ProductionControlPlane:
         action: str = "read",
     ):
         # 【改造】单用户模式（本地单机运行）：跳过租户/资源 ACL 校验，直接放行，
-        # 保留审计留痕；signature 不变，调用方零改动。多租户能力仍在（置 False 恢复原逻辑）。
+        # 保留审计留痕；signature 不变，调用方零改动。多租户暂不考虑（2026-08-16）。
         if ProductionControlPlane.SINGLE_USER_MODE:
             event = {
                 "event_id": uuid.uuid4().hex,
